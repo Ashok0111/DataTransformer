@@ -82,12 +82,13 @@
           <table class="table table-bordered align-middle">
             <thead class="table-light">
               <tr>
-                <th style="width:16%">Sheet</th>
-                <th style="width:16%">Source Map</th>
-                <th style="width:16%">Target Map</th>
-                <th style="width:18%">Source Column</th>
-                <th style="width:18%">Target Column</th>
-                <th style="width:12%">Generic</th>
+                <th style="width:12%">Sheet</th>
+                <th style="width:12%">Column Index</th>
+                <th style="width:12%">Source Map</th>
+                <th style="width:12%">Target Map</th>
+                <th style="width:14%">Source Column</th>
+                <th style="width:14%">Target Column</th>
+                <th style="width:10%">Generic</th>
                 <th>Mandatory</th>
                 <th>Action</th>
               </tr>
@@ -398,6 +399,7 @@ function renderMapping() {
   const sheetNames = state.workbook?.SheetNames || [];
   state.mappings = state.mappings.map(m => ({
     sheet: m.sheet || state.sheetName || sheetNames[0] || '',
+    columnIndex: m.columnIndex || (['Products', 'Geography'].includes(m.sheet || state.sheetName || sheetNames[0] || '') ? 2 : 1),
     sourceMap: m.sourceMap || '',
     targetMap: m.targetMap || '',
     source: m.source || '',
@@ -414,6 +416,9 @@ function renderMapping() {
           <option value="">— select —</option>
           ${sheetNames.map(s => `<option value="${s}" ${s===m.sheet?'selected':''}>${s}</option>`).join('')}
         </select>
+      </td>
+      <td>
+        <input type="number" class="form-control form-control-sm" value="${m.columnIndex}" data-i="${i}" data-k="columnIndex" min="1" />
       </td>
       <td>
         <select class="form-select form-select-sm" data-i="${i}" data-k="sourceMap">
@@ -472,6 +477,14 @@ function renderMapping() {
         if (state.mappings[i].batchSource && !validCols.includes(state.mappings[i].batchSource)) {
           state.mappings[i].batchSource = '';
         }
+        // Set columnIndex based on sheet
+        state.mappings[i].columnIndex = ['Products', 'Geography'].includes(state.mappings[i].sheet) ? 2 : 1;
+        renderMapping();
+      }
+      if (k === 'sourceMap') {
+        // Auto-select targetMap and source to the same column as sourceMap
+        state.mappings[i].targetMap = el.value;
+        state.mappings[i].source = el.value;
         renderMapping();
       }
       if (k === 'source') {
@@ -494,8 +507,10 @@ function renderMapping() {
   tbody.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { state.mappings.splice(+b.dataset.del,1); renderMapping(); });
 }
 document.getElementById('btnAddMapRow').onclick = () => {
+  const defaultSheet = state.sheetName || '';
   state.mappings.push({
-    sheet: state.sheetName || '',
+    sheet: defaultSheet,
+    columnIndex: ['Products', 'Geography'].includes(defaultSheet) ? 2 : 1,
     sourceMap: '',
     targetMap: '',
     source: '',
