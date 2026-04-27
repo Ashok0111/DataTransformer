@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Excel Mapping & Transformation Tool</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mathjs@12.4.2/lib/browser/math.min.js"></script>
+<style>
+  body { background:#f6f8fb; }
+  .step-pill { cursor:pointer; }
+  .step-pill.active { background:#0d6efd!important; color:#fff!important; }
+  .step-pill.done { background:#198754!important; color:#fff!important; }
+  .table-scroll { max-height: 420px; overflow:auto; }
+  .map-row td { vertical-align: middle; }
+  code.formula { background:#eef; padding:2px 6px; border-radius:4px; }
+  .drop-zone { border:2px dashed #adb5bd; border-radius:12px; padding:48px; text-align:center; background:#fff; transition:.2s; }
+  .drop-zone.dragover { border-color:#0d6efd; background:#e7f1ff; }
+  .small-muted { font-size:.825rem; color:#6c757d; }
+</style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-dark">
+  <div class="container-fluid">
+    <span class="navbar-brand mb-0 h1"><i class="bi bi-file-earmark-spreadsheet"></i> Excel Mapping & Transformation Tool</span>
+    <div class="d-flex gap-2">
+      <button id="btnFxMenu" class="btn btn-outline-info btn-sm"><i class="bi bi-currency-exchange"></i> Exchange Menu</button>
+      <button id="btnSaveCfg" class="btn btn-outline-light btn-sm"><i class="bi bi-save"></i> Save Config</button>
+      <button id="btnLoadCfg" class="btn btn-outline-light btn-sm"><i class="bi bi-folder2-open"></i> Load Config</button>
+    </div>
+  </div>
+</nav>
+
+<div class="container-fluid py-3">
+  <!-- Stepper -->
+  <ul class="nav nav-pills justify-content-center mb-4 gap-2" id="stepper">
+    <li class="nav-item"><span class="nav-link step-pill active" data-step="1">1. Upload</span></li>
+    <li class="nav-item"><span class="nav-link step-pill" data-step="2">2. Mapping</span></li>
+    <li class="nav-item"><span class="nav-link step-pill" data-step="3">3. Formulas</span></li>
+    <li class="nav-item"><span class="nav-link step-pill" data-step="4">4. Preview</span></li>
+    <li class="nav-item"><span class="nav-link step-pill" data-step="5">5. Download</span></li>
+  </ul>
+
+  <!-- STEP 1: Upload -->
+  <section data-pane="1">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="card-title mb-3">Upload Excel / CSV</h4>
+        <div id="dropZone" class="drop-zone">
+          <i class="bi bi-cloud-arrow-up display-3 text-primary"></i>
+          <p class="mt-2 mb-1"><strong>Drop file here</strong> or click to browse</p>
+          <p class="small-muted">Supported: .xlsx, .xls, .csv &mdash; Max 20 MB &mdash; Up to 50,000+ rows</p>
+          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden />
+          <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()"><i class="bi bi-folder2-open"></i> Browse</button>
+        </div>
+        <div id="uploadStatus" class="mt-3"></div>
+        <div id="sheetPicker" class="mt-3 d-none">
+          <label class="form-label fw-bold">Select sheet:</label>
+          <select id="sheetSelect" class="form-select" style="max-width:320px;"></select>
+        </div>
+        <div id="filePreview" class="mt-3"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 2: Mapping -->
+  <section data-pane="2" class="d-none">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h4 class="card-title m-0">Column Mapping</h4>
+          <div>
+            <button id="btnAddMapRow" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus"></i> Add Mapping</button>
+            <button id="btnAddTarget" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i> Add Target Field</button>
+          </div>
+        </div>
+        <p class="small-muted">Map source columns from your file to master/target columns. Mark mandatory fields and prevent duplicate target mapping.</p>
+        <div class="table-responsive table-scroll">
+          <table class="table table-bordered align-middle">
+            <thead class="table-light">
+              <tr>
+                <th style="width:16%">Sheet</th>
+                <th style="width:16%">Source Map</th>
+                <th style="width:16%">Target Map</th>
+                <th style="width:18%">Source Column</th>
+                <th style="width:18%">Target Column</th>
+                <th style="width:12%">Generic</th>
+                <th>Mandatory</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="mapTableBody"></tbody>
+          </table>
+        </div>
+        <div id="mapWarning" class="text-danger small mt-2"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 3: Formulas -->
+  <section data-pane="3" class="d-none">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h4 class="card-title m-0">Derived Columns (Formula Builder)</h4>
+          <button id="btnAddFormula" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus"></i> Add Derived Column</button>
+        </div>
+        <p class="small-muted">Use source column names like <code class="formula">price * quantity</code> or <code class="formula">(a + b) / c</code>. Max 200 chars, up to 50 derived columns.</p>
+        <div id="formulasList"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Exchange Menu -->
+  <section data-pane="fx" class="d-none">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="card-title mb-3">Exchange Rate Menu</h4>
+        <div class="row g-3">
+          <div class="col-md-3">
+            <label class="form-label">Year</label>
+            <select id="fxYear" class="form-select"></select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Quarter</label>
+            <select id="fxQuarter" class="form-select">
+              <option value="">— none —</option>
+              <option>Q1</option><option>Q2</option><option>Q3</option><option>Q4</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Month</label>
+            <select id="fxMonth" class="form-select">
+              <option value="">— none —</option>
+              <option>Jan</option><option>Feb</option><option>Mar</option><option>Apr</option>
+              <option>May</option><option>Jun</option><option>Jul</option><option>Aug</option>
+              <option>Sep</option><option>Oct</option><option>Nov</option><option>Dec</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Resolved Rate</label>
+            <input id="fxResolved" type="number" step="0.0001" class="form-control" placeholder="auto" />
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="form-label">Apply rate to columns (multiply):</label>
+          <input id="fxColumns" class="form-control" placeholder="e.g. amount, price (comma-separated source columns)" />
+        </div>
+        <div id="fxWarning" class="text-warning small mt-2"></div>
+        <hr />
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          <button id="btnFxReset5Years" class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-repeat"></i> Generate Last 5 Years</button>
+          <button id="btnFxExportJson" class="btn btn-sm btn-outline-success"><i class="bi bi-filetype-json"></i> Export JSON</button>
+          <button id="btnFxImportJson" class="btn btn-sm btn-outline-secondary"><i class="bi bi-upload"></i> Upload JSON</button>
+          <input id="fxJsonInput" type="file" accept=".json,application/json" hidden />
+        </div>
+        <div id="fxTableWrap" class="table-responsive table-scroll"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 4: Preview -->
+  <section data-pane="4" class="d-none">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h4 class="card-title m-0">Processed Preview</h4>
+          <button id="btnProcess" class="btn btn-success"><i class="bi bi-play-fill"></i> Run Processing</button>
+        </div>
+        <div id="processStats" class="mb-2"></div>
+        <div id="previewTableWrap" class="table-responsive table-scroll"></div>
+        <div id="errorTableWrap" class="mt-3"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 5: Download -->
+  <section data-pane="5" class="d-none">
+    <div class="card shadow-sm">
+      <div class="card-body text-center">
+        <h4 class="card-title mb-3">Download Master Excel</h4>
+        <p>The output workbook contains: <strong>Data</strong>, <strong>Errors</strong>, and <strong>Summary</strong> sheets.</p>
+        <button id="btnDownload" class="btn btn-lg btn-primary"><i class="bi bi-download"></i> Download .xlsx</button>
+        <div id="downloadStatus" class="mt-3 small-muted"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Nav -->
+  <div class="d-flex justify-content-between mt-3">
+    <button id="btnPrev" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Previous</button>
+    <button id="btnNext" class="btn btn-primary">Next <i class="bi bi-arrow-right"></i></button>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   State
+============================================================ */
+const MAX_SIZE = 20 * 1024 * 1024;
+const NEW_COLUMN_SOURCE = '__NEW_COLUMN__';
+const FX_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const FX_QUARTERS = ['Q1','Q2','Q3','Q4'];
+const state = {
+  step: 1,
+  workbook: null,
+  sheetName: null,
+  sheetData: {},          // { [sheetName]: { rows, sourceCols } }
+  sourceCols: [],
+  rows: [],
+  mappings: [],          // { sheet, sourceMap, targetMap, source, target, generic, batchSource, mandatory, newValue }
+  targetFields: ['id','name','date','amount','currency','rate','converted'],
+  formulas: [],          // { name, expr }
+  fx: { year:null, quarter:'', month:'', resolved:null, columns:'' },
+  fxRates: {},            // { "year_quarter_month": rate }
+  processed: null,       // { rows, errors, columns }
+};
+
+/* ============================================================
+   Stepper navigation
+============================================================ */
+function gotoStep(n) {
+  state.step = n;
+  document.querySelectorAll('[data-pane]').forEach(el => el.classList.add('d-none'));
+  document.querySelector(`[data-pane="${n}"]`).classList.remove('d-none');
+  document.querySelectorAll('.step-pill').forEach(p => {
+    const s = +p.dataset.step;
+    p.classList.toggle('active', s === n);
+    p.classList.toggle('done', s < n);
+  });
+  document.getElementById('btnPrev').disabled = n === 1;
+  document.getElementById('btnNext').classList.toggle('d-none', n === 5);
+  if (n === 2) renderMapping();
+  if (n === 3) renderFormulas();
+  if (n === 4) renderPreviewArea();
+}
+document.querySelectorAll('.step-pill').forEach(p => p.onclick = () => gotoStep(+p.dataset.step));
+document.getElementById('btnPrev').onclick = () => gotoStep(Math.max(1, state.step - 1));
+document.getElementById('btnNext').onclick = () => {
+  if (state.step === 1 && !state.rows.length) { alert('Please upload a file first.'); return; }
+  if (state.step === 2) {
+    const missing = state.mappings.filter(m => {
+      if (!m.mandatory) return false;
+      const hasSource = m.source === NEW_COLUMN_SOURCE || (Boolean(m.sheet) && Boolean(m.source));
+      return !hasSource || !m.target;
+    });
+    if (missing.length) { document.getElementById('mapWarning').textContent = 'Mandatory fields must be fully mapped.'; return; }
+    const targets = state.mappings.map(m => m.target).filter(Boolean);
+    const dupes = targets.filter((t,i) => targets.indexOf(t) !== i);
+    if (dupes.length) { document.getElementById('mapWarning').textContent = 'Duplicate target mapping: ' + [...new Set(dupes)].join(', '); return; }
+    document.getElementById('mapWarning').textContent = '';
+  }
+  gotoStep(Math.min(5, state.step + 1));
+};
+document.getElementById('btnFxMenu').onclick = () => {
+  document.querySelectorAll('[data-pane]').forEach(el => el.classList.add('d-none'));
+  document.querySelector('[data-pane="fx"]').classList.remove('d-none');
+  document.querySelectorAll('.step-pill').forEach(p => p.classList.remove('active'));
+  document.getElementById('btnPrev').disabled = true;
+  document.getElementById('btnNext').classList.add('d-none');
+  renderFx();
+};
+
+/* ============================================================
+   STEP 1 — File upload & parsing
+============================================================ */
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+['dragenter','dragover'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('dragover'); }));
+['dragleave','drop'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.remove('dragover'); }));
+dropZone.addEventListener('drop', ev => { if (ev.dataTransfer.files[0]) handleFile(ev.dataTransfer.files[0]); });
+fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+function setStatus(html, type='info') {
+  document.getElementById('uploadStatus').innerHTML = `<div class="alert alert-${type} py-2 mb-0">${html}</div>`;
+}
+
+function handleFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['xlsx','xls','csv'].includes(ext)) return setStatus('❌ Unsupported format. Use .xlsx, .xls, or .csv', 'danger');
+  if (file.size === 0) return setStatus('❌ File is empty.', 'danger');
+  if (file.size > MAX_SIZE) return setStatus('❌ File exceeds 20 MB limit.', 'danger');
+
+  setStatus(`⏳ Reading <strong>${file.name}</strong> (${(file.size/1024).toFixed(1)} KB)...`);
+  const reader = new FileReader();
+  reader.onerror = () => setStatus('❌ Could not read file (corrupted?).', 'danger');
+  reader.onload = e => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+      if (!wb.SheetNames.length) throw new Error('No sheets found');
+      state.workbook = wb;
+      state.sheetData = {};
+      const picker = document.getElementById('sheetPicker');
+      const sel = document.getElementById('sheetSelect');
+      sel.innerHTML = wb.SheetNames.map(n => `<option>${n}</option>`).join('');
+      picker.classList.remove('d-none');
+      sel.onchange = () => loadSheet(sel.value);
+      loadSheet(wb.SheetNames[0]);
+      setStatus(`✅ Loaded <strong>${file.name}</strong> — ${wb.SheetNames.length} sheet(s).`, 'success');
+    } catch (err) {
+      setStatus('❌ Corrupted or unreadable file: ' + err.message, 'danger');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function loadSheet(name) {
+  state.sheetName = name;
+  const ws = state.workbook.Sheets[name];
+  const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+  if (!json.length) { setStatus('❌ Selected sheet is empty.', 'danger'); return; }
+
+  // dedupe headers
+  const rawHeaders = Object.keys(json[0]);
+  const seen = {}; const headers = [];
+  rawHeaders.forEach(h => { if (seen[h]) { let i=2; while (seen[h+'_'+i]) i++; const n=h+'_'+i; seen[n]=1; headers.push(n);} else { seen[h]=1; headers.push(h);} });
+
+  // remap rows if renames happened
+  const renamed = headers.some((h,i) => h !== rawHeaders[i]);
+  state.rows = renamed ? json.map(r => { const o={}; rawHeaders.forEach((h,i)=> o[headers[i]] = r[h]); return o; }) : json;
+  state.sourceCols = headers;
+  state.sheetData[name] = { rows: state.rows, sourceCols: headers };
+
+  // Cache all sheets to support per-mapping sheet+source selection.
+  state.workbook.SheetNames.forEach(sheet => {
+    if (state.sheetData[sheet]) return;
+    const sh = state.workbook.Sheets[sheet];
+    const data = XLSX.utils.sheet_to_json(sh, { defval: '' });
+    if (!data.length) {
+      state.sheetData[sheet] = { rows: [], sourceCols: [] };
+      return;
+    }
+    const raw = Object.keys(data[0]);
+    const seenLocal = {};
+    const deduped = [];
+    raw.forEach(h => {
+      if (seenLocal[h]) {
+        let i = 2;
+        while (seenLocal[h + '_' + i]) i++;
+        const n = h + '_' + i;
+        seenLocal[n] = 1;
+        deduped.push(n);
+      } else {
+        seenLocal[h] = 1;
+        deduped.push(h);
+      }
+    });
+    const renamedLocal = deduped.some((h, i) => h !== raw[i]);
+    const rowsLocal = renamedLocal
+      ? data.map(r => {
+          const o = {};
+          raw.forEach((h, i) => { o[deduped[i]] = r[h]; });
+          return o;
+        })
+      : data;
+    state.sheetData[sheet] = { rows: rowsLocal, sourceCols: deduped };
+  });
+
+  // initial mapping suggestions
+  state.mappings = headers.slice(0, 8).map(h => ({
+    sheet: state.sheetName,
+    sourceMap: '',
+    targetMap: '',
+    source: h,
+    target: h.toLowerCase().replace(/\s+/g,'_'),
+    generic: '',
+    batchSource: '',
+    mandatory: false,
+    newValue: ''
+  }));
+  renderFilePreview();
+}
+
+function renderFilePreview() {
+  const cols = state.sourceCols;
+  const sample = state.rows.slice(0, 5);
+  const html = `
+    <div class="alert alert-light border">
+      <strong>Rows:</strong> ${state.rows.length.toLocaleString()} &nbsp;|&nbsp;
+      <strong>Columns:</strong> ${cols.length}
+    </div>
+    <div class="table-responsive table-scroll">
+      <table class="table table-sm table-striped">
+        <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+        <tbody>${sample.map(r=>`<tr>${cols.map(c=>`<td>${r[c]??''}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  document.getElementById('filePreview').innerHTML = html;
+}
+
+/* ============================================================
+   STEP 2 — Mapping
+============================================================ */
+function renderMapping() {
+  const tbody = document.getElementById('mapTableBody');
+  const sheetNames = state.workbook?.SheetNames || [];
+  state.mappings = state.mappings.map(m => ({
+    sheet: m.sheet || state.sheetName || sheetNames[0] || '',
+    sourceMap: m.sourceMap || '',
+    targetMap: m.targetMap || '',
+    source: m.source || '',
+    target: m.target || '',
+    generic: m.generic || m.split || '',
+    batchSource: m.batchSource || '',
+    mandatory: Boolean(m.mandatory),
+    newValue: m.newValue ?? ''
+  }));
+  tbody.innerHTML = state.mappings.map((m, i) => `
+    <tr class="map-row">
+      <td>
+        <select class="form-select form-select-sm" data-i="${i}" data-k="sheet">
+          <option value="">— select —</option>
+          ${sheetNames.map(s => `<option value="${s}" ${s===m.sheet?'selected':''}>${s}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <select class="form-select form-select-sm" data-i="${i}" data-k="sourceMap">
+          <option value="">— none —</option>
+          ${((state.sheetData[m.sheet]?.sourceCols) || []).map(c => `<option ${c===m.sourceMap?'selected':''}>${c}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <select class="form-select form-select-sm" data-i="${i}" data-k="targetMap">
+          <option value="">— none —</option>
+          ${state.sourceCols.map(c => `<option ${c===m.targetMap?'selected':''}>${c}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <select class="form-select form-select-sm" data-i="${i}" data-k="source">
+          <option value="">— select —</option>
+          <option value="${NEW_COLUMN_SOURCE}" ${m.source===NEW_COLUMN_SOURCE?'selected':''}>+ Create New Column</option>
+          ${((state.sheetData[m.sheet]?.sourceCols) || []).map(c => `<option ${c===m.source?'selected':''}>${c}</option>`).join('')}
+        </select>
+        <input class="form-control form-control-sm mt-1 ${m.source===NEW_COLUMN_SOURCE?'':'d-none'}" placeholder="Default value (optional)" value="${m.newValue??''}" data-i="${i}" data-k="newValue" />
+      </td>
+      <td>
+        <input list="targetList" class="form-control form-control-sm" value="${m.target||''}" data-i="${i}" data-k="target" />
+      </td>
+      <td>
+        <select class="form-select form-select-sm" data-i="${i}" data-k="generic">
+          <option value="">— none —</option>
+          <option value="split_year" ${m.generic==='split_year'?'selected':''}>Split to Year</option>
+          <option value="split_month" ${m.generic==='split_month'?'selected':''}>Split to Month</option>
+          <option value="exchange_auto" ${m.generic==='exchange_auto'?'selected':''}>Exchange Auto (value/rate)</option>
+        </select>
+        <select class="form-select form-select-sm mt-1 ${m.generic==='exchange_auto'?'':'d-none'}" data-i="${i}" data-k="batchSource">
+          <option value="">batchid column — select —</option>
+          ${((state.sheetData[m.sheet]?.sourceCols) || []).map(c => `<option ${c===m.batchSource?'selected':''}>${c}</option>`).join('')}
+        </select>
+      </td>
+      <td class="text-center">
+        <input type="checkbox" class="form-check-input" ${m.mandatory?'checked':''} data-i="${i}" data-k="mandatory" />
+      </td>
+      <td><button class="btn btn-sm btn-outline-danger" data-del="${i}"><i class="bi bi-trash"></i></button></td>
+    </tr>
+  `).join('') + `<datalist id="targetList">${state.targetFields.map(t=>`<option>${t}</option>`).join('')}</datalist>`;
+
+  tbody.querySelectorAll('select,input').forEach(el => {
+    el.onchange = () => {
+      const i = +el.dataset.i, k = el.dataset.k;
+      state.mappings[i][k] = el.type === 'checkbox' ? el.checked : el.value;
+      if (k === 'sheet') {
+        const validCols = (state.sheetData[state.mappings[i].sheet]?.sourceCols) || [];
+        if (state.mappings[i].source !== NEW_COLUMN_SOURCE && !validCols.includes(state.mappings[i].source)) {
+          state.mappings[i].source = '';
+        }
+        if (state.mappings[i].sourceMap && !validCols.includes(state.mappings[i].sourceMap)) {
+          state.mappings[i].sourceMap = '';
+        }
+        if (state.mappings[i].batchSource && !validCols.includes(state.mappings[i].batchSource)) {
+          state.mappings[i].batchSource = '';
+        }
+        renderMapping();
+      }
+      if (k === 'source') {
+        if (state.mappings[i].source !== NEW_COLUMN_SOURCE) {
+          state.mappings[i].newValue = '';
+        }
+        renderMapping();
+      }
+      if (k === 'generic') {
+        if (state.mappings[i].generic !== 'exchange_auto') {
+          state.mappings[i].batchSource = '';
+        }
+        renderMapping();
+      }
+    };
+    if (el.dataset.k === 'newValue') {
+      el.oninput = el.onchange;
+    }
+  });
+  tbody.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { state.mappings.splice(+b.dataset.del,1); renderMapping(); });
+}
+document.getElementById('btnAddMapRow').onclick = () => {
+  state.mappings.push({
+    sheet: state.sheetName || '',
+    sourceMap: '',
+    targetMap: '',
+    source: '',
+    target: '',
+    generic: '',
+    batchSource: '',
+    mandatory: false,
+    newValue: ''
+  });
+  renderMapping();
+};
+document.getElementById('btnAddTarget').onclick = () => {
+  const n = prompt('New target field name:'); if (n) { state.targetFields.push(n); renderMapping(); }
+};
+
+/* ============================================================
+   STEP 3 — Formulas
+============================================================ */
+function renderFormulas() {
+  const wrap = document.getElementById('formulasList');
+  wrap.innerHTML = state.formulas.map((f, i) => `
+    <div class="row g-2 align-items-center mb-2">
+      <div class="col-md-3"><input class="form-control" placeholder="column name" value="${f.name||''}" data-i="${i}" data-k="name" /></div>
+      <div class="col-md-6"><input class="form-control" placeholder="e.g. price * quantity" maxlength="200" value="${f.expr||''}" data-i="${i}" data-k="expr" /></div>
+      <div class="col-md-2"><span class="small text-muted" id="fxPrev_${i}">—</span></div>
+      <div class="col-md-1"><button class="btn btn-sm btn-outline-danger" data-del="${i}"><i class="bi bi-trash"></i></button></div>
+    </div>
+  `).join('');
+  wrap.querySelectorAll('input').forEach(el => el.oninput = () => {
+    const i = +el.dataset.i; state.formulas[i][el.dataset.k] = el.value; previewFormula(i);
+  });
+  wrap.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { state.formulas.splice(+b.dataset.del,1); renderFormulas(); });
+  state.formulas.forEach((_,i)=>previewFormula(i));
+}
+function previewFormula(i) {
+  const f = state.formulas[i]; const out = document.getElementById('fxPrev_'+i); if (!out) return;
+  if (!f.expr) { out.textContent = '—'; out.className='small text-muted'; return; }
+  const sample = state.rows[0] || {};
+  try {
+    const scope = buildFormulaScope(sample);
+    const v = math.evaluate(f.expr, scope);
+    out.textContent = '= ' + v;
+    out.className = 'small text-success';
+  } catch (e) { out.textContent = '⚠ ' + e.message; out.className='small text-danger'; }
+}
+document.getElementById('btnAddFormula').onclick = () => {
+  if (state.formulas.length >= 50) return alert('Max 50 derived columns.');
+  state.formulas.push({name:'', expr:''}); renderFormulas();
+};
+
+/* ============================================================
+   Exchange menu — Editable rate table + JSON I/O
+============================================================ */
+function getFxKey(year, quarter, month) {
+  return `${year}_${quarter}_${month}`;
+}
+function buildFormulaScope(row) {
+  const scope = {};
+  state.sourceCols.forEach(c => {
+    const raw = row[c];
+    const n = Number(raw);
+    scope[c] = Number.isNaN(n) ? 0 : n;
+  });
+  return scope;
+}
+function monthFromNumber(monthNum) {
+  return FX_MONTHS[monthNum - 1] || '';
+}
+function quarterFromMonth(monthNum) {
+  if (monthNum >= 1 && monthNum <= 3) return 'Q1';
+  if (monthNum >= 4 && monthNum <= 6) return 'Q2';
+  if (monthNum >= 7 && monthNum <= 9) return 'Q3';
+  if (monthNum >= 10 && monthNum <= 12) return 'Q4';
+  return '';
+}
+function getFxRateFromBatchId(batchId) {
+  const text = String(batchId ?? '').trim();
+  if (!/^\d{6}$/.test(text)) return null;
+  const year = text.slice(0, 4);
+  const monthNum = Number(text.slice(4, 6));
+  const month = monthFromNumber(monthNum);
+  const quarter = quarterFromMonth(monthNum);
+  if (!month || !quarter) return null;
+  const monthNumText = String(monthNum).padStart(2, '0');
+  const candidateKeys = [
+    getFxKey(year, quarter, month),
+    getFxKey(year, quarter, month.toUpperCase()),
+    getFxKey(year, quarter, month.toLowerCase()),
+    getFxKey(year, quarter, monthNumText)
+  ];
+  for (const key of candidateKeys) {
+    const rate = state.fxRates[key];
+    if (rate != null && !Number.isNaN(Number(rate))) return Number(rate);
+  }
+  return null;
+}
+function detectBatchId(row) {
+  if (!row) return '';
+  const candidates = ['batchid', 'batch_id', 'batch'];
+  for (const key of candidates) {
+    if (row[key] !== undefined && row[key] !== null && row[key] !== '') return row[key];
+    const found = Object.keys(row).find(k => k.toLowerCase() === key.toLowerCase());
+    if (found && row[found] !== undefined && row[found] !== null && row[found] !== '') return row[found];
+  }
+  return '';
+}
+function applyGenericTransform(value, genericMode, row, batchSource, baseRow) {
+  if (!genericMode) return { value, calc: '', error: '' };
+  const text = String(value ?? '').trim();
+  // Expected format: YYYYMM (e.g. 202510)
+  if (genericMode === 'split_year') {
+    if (!/^\d{6}$/.test(text)) return { value, calc: '', error: '' };
+    return { value: text.slice(0, 4), calc: `${text} -> year ${text.slice(0, 4)}`, error: '' };
+  }
+  if (genericMode === 'split_month') {
+    if (!/^\d{6}$/.test(text)) return { value, calc: '', error: '' };
+    const monthNum = Number(text.slice(4, 6));
+    const month = monthFromNumber(monthNum);
+    const monthOut = month ? month.toUpperCase() : text.slice(4, 6);
+    return { value: monthOut, calc: `${text} -> month ${monthOut}`, error: '' };
+  }
+  if (genericMode === 'exchange_auto') {
+    const numericValue = Number(value);
+    if (Number.isNaN(numericValue)) return { value, calc: '', error: 'Source value is not numeric for exchange conversion.' };
+    let batchIdValue = '';
+    if (batchSource) {
+      batchIdValue = row?.[batchSource] ?? '';
+      if ((batchIdValue === '' || batchIdValue == null) && baseRow) {
+        batchIdValue = baseRow[batchSource] ?? '';
+      }
+    }
+    if (batchIdValue === '' || batchIdValue == null) {
+      batchIdValue = detectBatchId(row) || detectBatchId(baseRow);
+    }
+    const rate = getFxRateFromBatchId(batchIdValue);
+    if (rate == null || rate === 0) {
+      return { value, calc: '', error: `No exchange rate found for batchid "${batchIdValue}".` };
+    }
+    const converted = numericValue / rate;
+    return {
+      value: converted,
+      calc: `${numericValue} / ${rate} = ${converted}`,
+      error: ''
+    };
+  }
+  return { value, calc: '', error: '' };
+}
+function generateLast5YearsFxRates() {
+  const nowYear = new Date().getFullYear();
+  const startYear = nowYear - 4;
+  const rates = {};
+  for (let y = startYear; y <= nowYear; y++) {
+    const base = 80 + (y - startYear) * 0.8;
+    FX_QUARTERS.forEach((q, qIdx) => {
+      const qMonths = FX_MONTHS.slice(qIdx * 3, qIdx * 3 + 3);
+      qMonths.forEach((m, mIdx) => {
+        const rate = Number((base + qIdx * 0.15 + mIdx * 0.05).toFixed(4));
+        rates[getFxKey(y, q, m)] = rate;
+      });
+    });
+  }
+  return rates;
+}
+function getFxYearsFromRates() {
+  const years = Object.keys(state.fxRates)
+    .map(k => Number((k.split('_')[0] || '').trim()))
+    .filter(v => !Number.isNaN(v));
+  return [...new Set(years)].sort((a, b) => a - b);
+}
+function renderFxTable() {
+  const wrap = document.getElementById('fxTableWrap');
+  const entries = Object.entries(state.fxRates).sort(([a], [b]) => a.localeCompare(b));
+  if (!entries.length) {
+    wrap.innerHTML = '<div class="alert alert-warning py-2 mb-0">No rates available. Click <strong>Generate Last 5 Years</strong>.</div>';
+    return;
+  }
+  wrap.innerHTML = `
+    <table class="table table-sm table-bordered">
+      <thead class="table-light"><tr><th>year_quarter_month</th><th style="width:180px">Rate</th></tr></thead>
+      <tbody>
+        ${entries.map(([k, v]) => `
+          <tr>
+            <td>${k}</td>
+            <td><input class="form-control form-control-sm" type="number" step="0.0001" data-fx-key="${k}" value="${v}" /></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+  wrap.querySelectorAll('[data-fx-key]').forEach(input => {
+    input.oninput = () => {
+      const key = input.dataset.fxKey;
+      const value = Number(input.value);
+      if (!Number.isNaN(value)) state.fxRates[key] = value;
+      resolveFx();
+    };
+  });
+}
+function renderFx() {
+  if (!Object.keys(state.fxRates).length) {
+    state.fxRates = generateLast5YearsFxRates();
+  }
+  const ySel = document.getElementById('fxYear');
+  const years = getFxYearsFromRates();
+  ySel.innerHTML = '<option value="">— none —</option>' + years.map(y => `<option>${y}</option>`).join('');
+  ySel.value = state.fx.year || '';
+  document.getElementById('fxQuarter').value = state.fx.quarter;
+  document.getElementById('fxMonth').value = state.fx.month;
+  document.getElementById('fxColumns').value = state.fx.columns;
+  document.getElementById('fxResolved').value = state.fx.resolved ?? '';
+  renderFxTable();
+  resolveFx();
+}
+['fxYear','fxQuarter','fxMonth','fxColumns','fxResolved'].forEach(id => {
+  document.addEventListener('change', e => { if (e.target && e.target.id === id) { syncFx(); resolveFx(); }});
+  document.addEventListener('input', e => { if (e.target && e.target.id === id) syncFx(); });
+});
+function syncFx() {
+  state.fx.year = document.getElementById('fxYear').value;
+  state.fx.quarter = document.getElementById('fxQuarter').value;
+  state.fx.month = document.getElementById('fxMonth').value;
+  state.fx.columns = document.getElementById('fxColumns').value;
+  const r = document.getElementById('fxResolved').value;
+  state.fx.resolved = r === '' ? null : Number(r);
+}
+function resolveFx() {
+  const warn = document.getElementById('fxWarning');
+  warn.textContent = '';
+  const { year, quarter, month } = state.fx;
+  const manual = document.getElementById('fxResolved').value;
+  if (manual !== '' && year && quarter && month) {
+    // Keep the field editable, but auto-fill from table when selection changes.
+    state.fx.resolved = Number(manual);
+  }
+  if (!year || !quarter || !month) {
+    warn.textContent = 'Select year, quarter, and month to resolve rate automatically.';
+    return;
+  }
+  const key = getFxKey(year, quarter, month);
+  const rate = state.fxRates[key];
+  if (rate == null) {
+    warn.textContent = `No rate found for ${key}. Enter a manual value or edit table.`;
+    return;
+  }
+  document.getElementById('fxResolved').value = rate;
+  state.fx.resolved = rate;
+}
+document.getElementById('btnFxReset5Years').onclick = () => {
+  state.fxRates = generateLast5YearsFxRates();
+  renderFx();
+};
+document.getElementById('btnFxExportJson').onclick = () => {
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    rates: state.fxRates
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'exchange_rates.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+};
+document.getElementById('btnFxImportJson').onclick = () => document.getElementById('fxJsonInput').click();
+document.getElementById('fxJsonInput').addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const rates = parsed && parsed.rates && typeof parsed.rates === 'object' ? parsed.rates : null;
+    if (!rates) throw new Error('JSON must contain a "rates" object.');
+    const clean = {};
+    Object.entries(rates).forEach(([k, v]) => {
+      const n = Number(v);
+      if (!Number.isNaN(n)) clean[k] = n;
+    });
+    if (!Object.keys(clean).length) throw new Error('No valid numeric rates found.');
+    state.fxRates = clean;
+    renderFx();
+  } catch (err) {
+    alert('Invalid exchange JSON: ' + err.message);
+  } finally {
+    e.target.value = '';
+  }
+});
+
+/* ============================================================
+   STEP 5 — Processing
+============================================================ */
+document.getElementById('btnProcess').onclick = runProcessing;
+
+function runProcessing() {
+  const t0 = performance.now();
+  const errors = [];
+  if (!Object.keys(state.fxRates || {}).length) {
+    state.fxRates = generateLast5YearsFxRates();
+  }
+  const calculations = [];
+  const fxCols = state.fx.columns.split(',').map(s=>s.trim()).filter(Boolean);
+  const fxRate = state.fx.resolved;
+  const keyLookupCache = {};
+
+  const outRows = state.rows.map((row, idx) => {
+    const out = {};
+    // 1. Mapping
+    state.mappings.forEach(m => {
+      if (!m.target) return;
+      if (m.source === NEW_COLUMN_SOURCE) {
+        out[m.target] = m.newValue ?? '';
+      } else {
+        const mappedSheetRows = state.sheetData[m.sheet]?.rows || [];
+        let mappedRow = mappedSheetRows[idx] || {};
+
+        // If key mapping is configured, perform one-to-one row match using source_map/target_map.
+        if (m.sourceMap && m.targetMap) {
+          const cacheKey = `${m.sheet}::${m.sourceMap}`;
+          if (!keyLookupCache[cacheKey]) {
+            const lookup = new Map();
+            mappedSheetRows.forEach(r => {
+              const k = r[m.sourceMap];
+              if (k === '' || k == null) return;
+              const norm = String(k).trim();
+              if (!norm) return;
+              if (!lookup.has(norm)) lookup.set(norm, r);
+            });
+            keyLookupCache[cacheKey] = lookup;
+          }
+          const lookup = keyLookupCache[cacheKey];
+          const matchKey = row[m.targetMap];
+          const normMatch = matchKey == null ? '' : String(matchKey).trim();
+          mappedRow = (normMatch && lookup.get(normMatch)) || {};
+        }
+
+        const mappedValue = m.source ? mappedRow[m.source] ?? '' : '';
+        const genericResult = applyGenericTransform(mappedValue, m.generic, mappedRow, m.batchSource, row);
+        out[m.target] = genericResult.value;
+        if (m.generic === 'exchange_auto') {
+          calculations.push({
+            row: idx + 2,
+            target: m.target,
+            source: m.source,
+            batchid: m.batchSource ? (mappedRow[m.batchSource] ?? '') : '',
+            formula: genericResult.calc || 'No calculation',
+            result: genericResult.value
+          });
+          if (genericResult.error) {
+            errors.push({ row: idx + 2, column: m.target, message: genericResult.error });
+          }
+        }
+      }
+    });
+    // 2. FX conversion (multiply selected source columns)
+    if (fxRate && fxCols.length) {
+      fxCols.forEach(c => {
+        const v = Number(row[c]);
+        if (!isNaN(v)) out[c + '_converted'] = v * fxRate;
+      });
+    }
+    // 3. Formulas
+    state.formulas.forEach(f => {
+      if (!f.name || !f.expr) return;
+      try {
+        const scope = buildFormulaScope(row);
+        let val = math.evaluate(f.expr, scope);
+        if (typeof val === 'number' && !isFinite(val)) { val = 'DIV/0'; throw new Error('Division by zero'); }
+        out[f.name] = val;
+      } catch (e) {
+        out[f.name] = '#ERR';
+        errors.push({ row: idx + 2, column: f.name, message: e.message });
+      }
+    });
+    return out;
+  });
+
+  const cols = outRows.length ? Object.keys(outRows[0]) : [];
+  state.processed = { rows: outRows, errors, columns: cols, calculations, ms: Math.round(performance.now() - t0) };
+  renderPreviewArea();
+}
+
+function renderPreviewArea() {
+  const stats = document.getElementById('processStats');
+  const wrap = document.getElementById('previewTableWrap');
+  const errWrap = document.getElementById('errorTableWrap');
+  if (!state.processed) {
+    stats.innerHTML = '<div class="alert alert-info py-2 mb-0">Click <strong>Run Processing</strong> to apply mappings, formulas, and exchange rate.</div>';
+    wrap.innerHTML = ''; errWrap.innerHTML = ''; return;
+  }
+  const { rows, columns, errors, calculations, ms } = state.processed;
+  stats.innerHTML = `<div class="alert alert-success py-2 mb-0">
+    ✅ Processed <strong>${rows.length.toLocaleString()}</strong> rows in <strong>${ms} ms</strong>.
+    Errors: <strong>${errors.length}</strong>.</div>`;
+  const sample = rows.slice(0, 50);
+  wrap.innerHTML = `
+    <table class="table table-sm table-striped">
+      <thead><tr>${columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>${sample.map(r=>`<tr>${columns.map(c=>`<td>${r[c]??''}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>
+    <div class="small-muted">Showing first ${sample.length} of ${rows.length} rows.</div>`;
+  const calcHtml = calculations && calculations.length ? `
+    <h6 class="mt-3">Exchange Calculation Preview</h6>
+    <table class="table table-sm table-bordered">
+      <thead class="table-info"><tr><th>Row</th><th>Target</th><th>BatchId</th><th>Calculation</th><th>Result</th></tr></thead>
+      <tbody>${calculations.slice(0,100).map(c=>`<tr><td>${c.row}</td><td>${c.target}</td><td>${c.batchid}</td><td>${c.formula}</td><td>${c.result}</td></tr>`).join('')}</tbody>
+    </table>` : '';
+  const errHtml = errors.length ? `
+    <h6 class="mt-3">Error Log</h6>
+    <table class="table table-sm table-bordered">
+      <thead class="table-warning"><tr><th>Row</th><th>Column</th><th>Message</th></tr></thead>
+      <tbody>${errors.slice(0,100).map(e=>`<tr><td>${e.row}</td><td>${e.column}</td><td>${e.message}</td></tr>`).join('')}</tbody>
+    </table>` : '';
+  errWrap.innerHTML = calcHtml + errHtml;
+}
+
+/* ============================================================
+   STEP 6 — Download
+============================================================ */
+document.getElementById('btnDownload').onclick = () => {
+  if (!state.processed) { alert('Please run processing first.'); return; }
+  const { rows, errors, columns } = state.processed;
+  const wb = XLSX.utils.book_new();
+  const wsData = XLSX.utils.json_to_sheet(rows, { header: columns });
+  XLSX.utils.book_append_sheet(wb, wsData, 'Data');
+  const wsErr = XLSX.utils.json_to_sheet(errors.length ? errors : [{ row:'', column:'', message:'No errors' }]);
+  XLSX.utils.book_append_sheet(wb, wsErr, 'Errors');
+  const summary = [
+    { metric:'Total rows', value: rows.length },
+    { metric:'Total columns', value: columns.length },
+    { metric:'Mapping rules', value: state.mappings.length },
+    { metric:'Derived columns', value: state.formulas.length },
+    { metric:'Exchange rate', value: state.fx.resolved ?? 'n/a' },
+    { metric:'Errors', value: errors.length },
+    { metric:'Generated', value: new Date().toISOString() },
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'Summary');
+  XLSX.writeFile(wb, 'master_output.xlsx');
+  document.getElementById('downloadStatus').textContent = '✅ Downloaded master_output.xlsx';
+};
+
+/* ============================================================
+   Save / Load configuration (versioned, in localStorage)
+============================================================ */
+document.getElementById('btnSaveCfg').onclick = () => {
+  const name = prompt('Configuration name:'); if (!name) return;
+  const all = JSON.parse(localStorage.getItem('excelToolConfigs') || '{}');
+  const versions = all[name] || [];
+  versions.push({
+    version: versions.length + 1,
+    savedAt: new Date().toISOString(),
+    mappings: state.mappings,
+    formulas: state.formulas,
+    fx: state.fx,
+    fxRates: state.fxRates,
+    targetFields: state.targetFields,
+  });
+  all[name] = versions;
+  localStorage.setItem('excelToolConfigs', JSON.stringify(all));
+  alert(`Saved "${name}" (v${versions.length}).`);
+};
+document.getElementById('btnLoadCfg').onclick = () => {
+  const all = JSON.parse(localStorage.getItem('excelToolConfigs') || '{}');
+  const names = Object.keys(all); if (!names.length) return alert('No saved configurations.');
+  const name = prompt('Load which? ' + names.join(', ')); if (!name || !all[name]) return;
+  const versions = all[name];
+  const v = prompt(`Versions 1..${versions.length} (default latest):`, versions.length);
+  const cfg = versions[(+v || versions.length) - 1]; if (!cfg) return;
+  state.mappings = cfg.mappings || [];
+  state.formulas = cfg.formulas || [];
+  state.fx = cfg.fx || { year:null, quarter:'', month:'', resolved:null, columns:'' };
+  state.fxRates = cfg.fxRates || state.fxRates || generateLast5YearsFxRates();
+  state.targetFields = cfg.targetFields || state.targetFields;
+  alert(`Loaded "${name}" v${cfg.version}.`);
+  gotoStep(2);
+};
+
+if (!Object.keys(state.fxRates).length) {
+  state.fxRates = generateLast5YearsFxRates();
+}
+gotoStep(1);
+</script>
+</body>
+</html>
