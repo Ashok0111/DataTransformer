@@ -82,13 +82,15 @@
           <table class="table table-bordered align-middle">
             <thead class="table-light">
               <tr>
-                <th style="width:12%">Sheet</th>
-                <th style="width:12%">Column Index</th>
-                <th style="width:12%">Source Map</th>
-                <th style="width:12%">Target Map</th>
-                <th style="width:14%">Source Column</th>
-                <th style="width:14%">Target Column</th>
-                <th style="width:10%">Generic</th>
+                <th style="width:10%">Source Sheet</th>
+                <th style="width:8%">Src Row Idx</th>
+                <th style="width:10%">Source Map</th>
+                <th style="width:10%">Target Sheet</th>
+                <th style="width:8%">Tgt Row Idx</th>
+                <th style="width:10%">Target Map</th>
+                <th style="width:12%">Source Column</th>
+                <th style="width:12%">Target Column</th>
+                <th style="width:8%">Generic</th>
                 <th>Mandatory</th>
                 <th>Action</th>
               </tr>
@@ -310,6 +312,7 @@ function handleFile(file) {
 function loadSheet(name) {
   state.sheetName = name;
   const ws = state.workbook.Sheets[name];
+  const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
   const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
   if (!json.length) { setStatus('❌ Selected sheet is empty.', 'danger'); return; }
 
@@ -322,15 +325,16 @@ function loadSheet(name) {
   const renamed = headers.some((h,i) => h !== rawHeaders[i]);
   state.rows = renamed ? json.map(r => { const o={}; rawHeaders.forEach((h,i)=> o[headers[i]] = r[h]); return o; }) : json;
   state.sourceCols = headers;
-  state.sheetData[name] = { rows: state.rows, sourceCols: headers };
+  state.sheetData[name] = { rows: state.rows, sourceCols: headers, rawRows };
 
   // Cache all sheets to support per-mapping sheet+source selection.
   state.workbook.SheetNames.forEach(sheet => {
     if (state.sheetData[sheet]) return;
     const sh = state.workbook.Sheets[sheet];
+    const rawRowsLocal = XLSX.utils.sheet_to_json(sh, { header: 1, defval: '' });
     const data = XLSX.utils.sheet_to_json(sh, { defval: '' });
     if (!data.length) {
-      state.sheetData[sheet] = { rows: [], sourceCols: [] };
+      state.sheetData[sheet] = { rows: [], sourceCols: [], rawRows: rawRowsLocal };
       return;
     }
     const raw = Object.keys(data[0]);
@@ -356,7 +360,7 @@ function loadSheet(name) {
           return o;
         })
       : data;
-    state.sheetData[sheet] = { rows: rowsLocal, sourceCols: deduped };
+    state.sheetData[sheet] = { rows: rowsLocal, sourceCols: deduped, rawRows: rawRowsLocal };
   });
 
   // initial mapping suggestions
@@ -399,7 +403,9 @@ function renderMapping() {
   const sheetNames = state.workbook?.SheetNames || [];
   state.mappings = state.mappings.map(m => ({
     sheet: m.sheet || state.sheetName || sheetNames[0] || '',
-    columnIndex: m.columnIndex || (['Products', 'Geography'].includes(m.sheet || state.sheetName || sheetNames[0] || '') ? 2 : 1),
+    rowIndex: m.rowIndex || 1,
+    targetSheet: m.targetSheet || '',
+    targetRowIndex: m.targetRowIndex || 1,
     sourceMap: m.sourceMap || '',
     targetMap: m.targetMap || '',
     source: m.source || '',
@@ -418,18 +424,37 @@ function renderMapping() {
         </select>
       </td>
       <td>
-        <input type="number" class="form-control form-control-sm" value="${m.columnIndex}" data-i="${i}" data-k="columnIndex" min="1" />
+        <input type="number" class="form-control form-control-sm" value="${m.rowIndex}" data-i="${i}" data-k="rowIndex" min="1" />
       </td>
       <td>
         <select class="form-select form-select-sm" data-i="${i}" data-k="sourceMap">
-          <option value="">— none —</option>
-          ${((state.sheetData[m.sheet]?.sourceCols) || []).map(c => `<option ${c===m.sourceMap?'selected':''}>${c}</option>`).join('')}
+          <option value="">— select —</option>
+          ${(() => {
+            const sheetData = state.sheetData[m.sheet];
+            if (!sheetData || !sheetData.rawRows || sheetData.rawRows.length < m.rowIndex) return '';
+            const row = sheetData.rawRows[m.rowIndex - 1] || [];
+            return [...new Set(row)].filter(v => v != null && v !== '').map(v => `<option ${v===m.sourceMap?'selected':''}>${v}</option>`).join('');
+          })()}
         </select>
       </td>
       <td>
+        <select class="form-select form-select-sm" data-i="${i}" data-k="targetSheet">
+          <option value="">— select —</option>
+          ${sheetNames.map(s => `<option value="${s}" ${s===m.targetSheet?'selected':''}>${s}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <input type="number" class="form-control form-control-sm" value="${m.targetRowIndex}" data-i="${i}" data-k="targetRowIndex" min="1" />
+      </td>
+      <td>
         <select class="form-select form-select-sm" data-i="${i}" data-k="targetMap">
-          <option value="">— none —</option>
-          ${state.sourceCols.map(c => `<option ${c===m.targetMap?'selected':''}>${c}</option>`).join('')}
+          <option value="">— select —</option>
+          ${(() => {
+            const sheetData = state.sheetData[m.targetSheet];
+            if (!sheetData || !sheetData.rawRows || sheetData.rawRows.length < m.targetRowIndex) return '';
+            const row = sheetData.rawRows[m.targetRowIndex - 1] || [];
+            return [...new Set(row)].filter(v => v != null && v !== '').map(v => `<option ${v===m.targetMap?'selected':''}>${v}</option>`).join('');
+          })()}
         </select>
       </td>
       <td>
@@ -471,20 +496,65 @@ function renderMapping() {
         if (state.mappings[i].source !== NEW_COLUMN_SOURCE && !validCols.includes(state.mappings[i].source)) {
           state.mappings[i].source = '';
         }
-        if (state.mappings[i].sourceMap && !validCols.includes(state.mappings[i].sourceMap)) {
-          state.mappings[i].sourceMap = '';
-        }
+        // sourceMap is now a value, not a column, so no need to validate
         if (state.mappings[i].batchSource && !validCols.includes(state.mappings[i].batchSource)) {
           state.mappings[i].batchSource = '';
         }
-        // Set columnIndex based on sheet
-        state.mappings[i].columnIndex = ['Products', 'Geography'].includes(state.mappings[i].sheet) ? 2 : 1;
+        // Auto-select target sheet to match source sheet when target is empty
+        if (!state.mappings[i].targetSheet) {
+          state.mappings[i].targetSheet = state.mappings[i].sheet;
+          state.mappings[i].targetRowIndex = state.mappings[i].rowIndex;
+        }
+        // Set rowIndex default to 1 when sheet changes
+        state.mappings[i].rowIndex = 1;
+        // Clear sourceMap since row changed
+        state.mappings[i].sourceMap = '';
+        renderMapping();
+      }
+      if (k === 'rowIndex') {
+        // Clear sourceMap when row index changes
+        state.mappings[i].sourceMap = '';
         renderMapping();
       }
       if (k === 'sourceMap') {
-        // Auto-select targetMap and source to the same column as sourceMap
-        state.mappings[i].targetMap = el.value;
-        state.mappings[i].source = el.value;
+        // Map the selected row value to the actual source column key
+        const sheetData = state.sheetData[state.mappings[i].sheet];
+        if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= state.mappings[i].rowIndex) {
+          const row = sheetData.rawRows[state.mappings[i].rowIndex - 1] || [];
+          const idx = row.findIndex(v => v == el.value);
+          if (idx >= 0 && sheetData.sourceCols[idx]) {
+            state.mappings[i].source = sheetData.sourceCols[idx];
+            state.mappings[i].targetMap = el.value;
+            if (!state.mappings[i].targetSheet) {
+              state.mappings[i].targetSheet = state.mappings[i].sheet;
+            }
+            if (!state.mappings[i].targetRowIndex) {
+              state.mappings[i].targetRowIndex = state.mappings[i].rowIndex;
+            }
+          }
+        }
+        renderMapping();
+      }
+      if (k === 'targetSheet') {
+        // Clear targetMap when target sheet changes
+        state.mappings[i].targetMap = '';
+        renderMapping();
+      }
+      if (k === 'targetRowIndex') {
+        // Clear targetMap when target row index changes
+        state.mappings[i].targetMap = '';
+        renderMapping();
+      }
+      if (k === 'targetMap') {
+        // Map the selected target row value to the actual target column key
+        const sheetData = state.sheetData[state.mappings[i].targetSheet];
+        if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= state.mappings[i].targetRowIndex) {
+          const row = sheetData.rawRows[state.mappings[i].targetRowIndex - 1] || [];
+          const idx = row.findIndex(v => v == el.value);
+          if (idx >= 0 && sheetData.sourceCols[idx]) {
+            state.mappings[i].target = sheetData.sourceCols[idx];
+          }
+        }
         renderMapping();
       }
       if (k === 'source') {
@@ -510,7 +580,9 @@ document.getElementById('btnAddMapRow').onclick = () => {
   const defaultSheet = state.sheetName || '';
   state.mappings.push({
     sheet: defaultSheet,
-    columnIndex: ['Products', 'Geography'].includes(defaultSheet) ? 2 : 1,
+    rowIndex: 1,
+    targetSheet: '',
+    targetRowIndex: 1,
     sourceMap: '',
     targetMap: '',
     source: '',
