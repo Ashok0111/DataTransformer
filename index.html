@@ -28,9 +28,6 @@
     <span class="navbar-brand mb-0 h1"><i class="bi bi-file-earmark-spreadsheet"></i> Excel Mapping & Transformation Tool</span>
     <div class="d-flex gap-2">
       <button id="btnFxMenu" class="btn btn-outline-info btn-sm"><i class="bi bi-currency-exchange"></i> Exchange Menu</button>
-      <button id="btnCopyMappingJson" class="btn btn-outline-light btn-sm"><i class="bi bi-clipboard"></i> Copy Mapping JSON</button>
-      <button id="btnSaveCfg" class="btn btn-outline-light btn-sm"><i class="bi bi-save"></i> Save Config</button>
-      <button id="btnLoadCfg" class="btn btn-outline-light btn-sm"><i class="bi bi-folder2-open"></i> Load Config</button>
     </div>
   </div>
 </nav>
@@ -73,9 +70,13 @@
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-center mb-3">
           <h4 class="card-title m-0">Column Mapping</h4>
-          <div>
+          <div class="d-flex gap-2 flex-wrap justify-content-end">
             <button id="btnAddMapRow" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus"></i> Add Mapping</button>
             <button id="btnAddTarget" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil"></i> Add Target Field</button>
+            <button id="btnCopyMappingJson" class="btn btn-sm btn-outline-dark"><i class="bi bi-clipboard"></i> Copy Mapping JSON</button>
+            <button id="btnDownloadMappingJson" class="btn btn-sm btn-outline-success"><i class="bi bi-download"></i> Download Mapping JSON</button>
+            <button id="btnUploadMappingJson" class="btn btn-sm btn-outline-secondary"><i class="bi bi-upload"></i> Upload Mapping JSON</button>
+            <input id="mappingJsonInput" type="file" accept=".json,application/json" hidden />
           </div>
         </div>
         <p class="small-muted">Map source columns from your file to master/target columns. Mark mandatory fields and prevent duplicate target mapping.</p>
@@ -424,6 +425,8 @@ function loadSheet(name) {
     source: h,
     target: h.toLowerCase().replace(/\s+/g,'_'),
     generic: '',
+    concatSource: '',
+    concatSep: ' ',
     batchSource: '',
     mandatory: false,
     newValue: ''
@@ -468,6 +471,8 @@ function renderMapping() {
     source: m.source || '',
     target: m.target || '',
     generic: m.generic || m.split || '',
+    concatSource: m.concatSource || '',
+    concatSep: m.concatSep ?? ' ',
     batchSource: m.batchSource || '',
     mandatory: Boolean(m.mandatory),
     newValue: m.newValue ?? ''
@@ -543,8 +548,20 @@ function renderMapping() {
           <option value="">— none —</option>
           <option value="split_year" ${m.generic==='split_year'?'selected':''}>Split to Year</option>
           <option value="split_month" ${m.generic==='split_month'?'selected':''}>Split to Month</option>
+          <option value="concat" ${m.generic==='concat'?'selected':''}>Concat</option>
+          <option value="cash_credit_type" ${m.generic==='cash_credit_type'?'selected':''}>Cash/Credit Type Conversion</option>
           <option value="exchange_auto" ${m.generic==='exchange_auto'?'selected':''}>Exchange Auto (value/rate)</option>
         </select>
+        <div class="${m.generic==='concat'?'':'d-none'} mt-1">
+          <select class="form-select form-select-sm mb-1" data-i="${i}" data-k="concatSource">
+            <option value="">concat with — select —</option>
+            ${(() => {
+              const cols = getHeadersForSheetRow(m.sheet, m.rowIndex);
+              return cols.map(col => `<option value="${col}" ${col === m.concatSource ? 'selected' : ''}>${col}</option>`).join('');
+            })()}
+          </select>
+          <input class="form-control form-control-sm" placeholder="separator" value="${m.concatSep ?? ' '}" data-i="${i}" data-k="concatSep" />
+        </div>
         <select class="form-select form-select-sm mt-1 ${m.generic==='exchange_auto'?'':'d-none'}" data-i="${i}" data-k="batchSource">
           <option value="">batchid column — select —</option>
           ${(() => {
@@ -605,6 +622,9 @@ function renderMapping() {
         if (state.mappings[i].batchSource && !rowHeaders.includes(state.mappings[i].batchSource)) {
           state.mappings[i].batchSource = '';
         }
+        if (state.mappings[i].concatSource && !rowHeaders.includes(state.mappings[i].concatSource)) {
+          state.mappings[i].concatSource = '';
+        }
         console.log(`Mapping state after update:`, state.mappings[i]);
         renderMapping();
       }
@@ -657,6 +677,10 @@ function renderMapping() {
         if (state.mappings[i].generic !== 'exchange_auto') {
           state.mappings[i].batchSource = '';
         }
+        if (state.mappings[i].generic !== 'concat') {
+          state.mappings[i].concatSource = '';
+          state.mappings[i].concatSep = ' ';
+        }
         renderMapping();
       }
     };
@@ -683,6 +707,8 @@ document.getElementById('btnAddMapRow').onclick = () => {
     source: '',
     target: '',
     generic: '',
+    concatSource: '',
+    concatSep: ' ',
     batchSource: '',
     mandatory: false,
     newValue: ''
@@ -698,44 +724,89 @@ document.getElementById('btnAddTarget').onclick = () => {
 ============================================================ */
 function renderFormulas() {
   const wrap = document.getElementById('formulasList');
+  const sheetNames = state.workbook?.SheetNames || (state.sheetName ? [state.sheetName] : []);
   wrap.innerHTML = state.formulas.map((f, i) => `
-    <div class="row g-2 align-items-center mb-2">
-      <div class="col-md-3"><input class="form-control" placeholder="column name" value="${f.name||''}" data-i="${i}" data-k="name" /></div>
-      <div class="col-md-6"><input class="form-control" placeholder="e.g. price * quantity" maxlength="200" value="${f.expr||''}" data-i="${i}" data-k="expr" /></div>
-      <div class="col-md-2"><span class="small text-muted" id="fxPrev_${i}">—</span></div>
-      <div class="col-md-1"><button class="btn btn-sm btn-outline-danger" data-del="${i}"><i class="bi bi-trash"></i></button></div>
+    <div class="border rounded p-2 mb-2">
+      <div class="row g-2 align-items-center mb-2">
+        <div class="col-md-2"><input class="form-control" placeholder="column name" value="${f.name||''}" data-i="${i}" data-k="name" /></div>
+        <div class="col-md-2">
+          <select class="form-select" data-i="${i}" data-k="sheet">
+            ${sheetNames.map(s => `<option value="${s}" ${(f.sheet || state.sheetName || sheetNames[0] || '')===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <select class="form-select" data-i="${i}" data-k="mode">
+            <option value="expr" ${(f.mode || 'expr')==='expr'?'selected':''}>Expression</option>
+            <option value="concat" ${f.mode==='concat'?'selected':''}>Concat 2 Columns</option>
+          </select>
+        </div>
+        <div class="col-md-5"><span class="small text-muted" id="fxPrev_${i}">—</span></div>
+        <div class="col-md-1"><button class="btn btn-sm btn-outline-danger" data-del="${i}"><i class="bi bi-trash"></i></button></div>
+      </div>
+      ${(f.mode || 'expr') === 'concat' ? `
+      <div class="row g-2 align-items-center">
+        <div class="col-md-4">
+          <select class="form-select" data-i="${i}" data-k="concatA">
+            <option value="">First column</option>
+            ${(() => {
+              const cols = getSheetDataByName(f.sheet || state.sheetName || '')?.sourceCols || [];
+              return cols.map(c => `<option value="${c}" ${f.concatA===c?'selected':''}>${c}</option>`).join('');
+            })()}
+          </select>
+        </div>
+        <div class="col-md-2"><input class="form-control" placeholder="separator" value="${f.concatSep ?? ' '}" data-i="${i}" data-k="concatSep" /></div>
+        <div class="col-md-4">
+          <select class="form-select" data-i="${i}" data-k="concatB">
+            <option value="">Second column</option>
+            ${(() => {
+              const cols = getSheetDataByName(f.sheet || state.sheetName || '')?.sourceCols || [];
+              return cols.map(c => `<option value="${c}" ${f.concatB===c?'selected':''}>${c}</option>`).join('');
+            })()}
+          </select>
+        </div>
+      </div>` : `
+      <div class="row g-2 align-items-center">
+        <div class="col-md-12"><input class="form-control" placeholder="e.g. price * quantity" maxlength="200" value="${f.expr||''}" data-i="${i}" data-k="expr" /></div>
+      </div>`}
     </div>
   `).join('');
-  wrap.querySelectorAll('input').forEach(el => el.oninput = () => {
-    const i = +el.dataset.i; state.formulas[i][el.dataset.k] = el.value; previewFormula(i);
+  wrap.querySelectorAll('input,select').forEach(el => {
+    const handler = () => {
+      const i = +el.dataset.i;
+      state.formulas[i][el.dataset.k] = el.value;
+      if (el.dataset.k === 'mode' || el.dataset.k === 'sheet') { renderFormulas(); return; }
+      previewFormula(i);
+    };
+    el.onchange = handler;
+    if (el.tagName === 'INPUT') el.oninput = handler;
   });
   wrap.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { state.formulas.splice(+b.dataset.del,1); renderFormulas(); });
   state.formulas.forEach((_,i)=>previewFormula(i));
 }
 function previewFormula(i) {
   const f = state.formulas[i]; const out = document.getElementById('fxPrev_'+i); if (!out) return;
-  if (!f.expr) { out.textContent = '—'; out.className='small text-muted'; return; }
-  const mappingCounts = state.mappings.reduce((acc, m) => {
-    if (m.sheet) acc[m.sheet] = (acc[m.sheet] || 0) + 1;
-    return acc;
-  }, {});
-  const baseSheet = (mappingCounts['Raw'] && getSheetDataByName('Raw'))
-    ? 'Raw'
-    : (state.sheetName && mappingCounts[state.sheetName])
-      ? state.sheetName
-      : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
-  const baseRows = getSheetDataByName(baseSheet)?.rows || state.rows;
+  const formulaSheet = f.sheet || state.sheetName;
+  const baseRows = getRowsForSheetRow(formulaSheet, 1);
   const sample = baseRows[0] || {};
   try {
-    const scope = buildFormulaScope(sample);
-    const v = math.evaluate(f.expr, scope);
+    let v;
+    if ((f.mode || 'expr') === 'concat') {
+      const a = f.concatA ? (sample[f.concatA] ?? '') : '';
+      const b = f.concatB ? (sample[f.concatB] ?? '') : '';
+      const sep = f.concatSep ?? ' ';
+      v = `${a}${sep}${b}`;
+    } else {
+      if (!f.expr) { out.textContent = '—'; out.className='small text-muted'; return; }
+      const scope = buildFormulaScope(sample);
+      v = math.evaluate(f.expr, scope);
+    }
     out.textContent = '= ' + v;
     out.className = 'small text-success';
   } catch (e) { out.textContent = '⚠ ' + e.message; out.className='small text-danger'; }
 }
 document.getElementById('btnAddFormula').onclick = () => {
   if (state.formulas.length >= 50) return alert('Max 50 derived columns.');
-  state.formulas.push({name:'', expr:''}); renderFormulas();
+  state.formulas.push({name:'', expr:'', sheet: state.sheetName || '', mode:'expr', concatA:'', concatB:'', concatSep:' '}); renderFormulas();
 };
 
 /* ============================================================
@@ -746,7 +817,7 @@ function getFxKey(year, quarter, month) {
 }
 function buildFormulaScope(row) {
   const scope = {};
-  state.sourceCols.forEach(c => {
+  Object.keys(row || {}).forEach(c => {
     const raw = row[c];
     const n = Number(raw);
     scope[c] = Number.isNaN(n) ? 0 : n;
@@ -832,6 +903,14 @@ function applyGenericTransform(value, genericMode, row, batchSource, baseRow) {
       calc: `${numericValue} / ${rate} = ${converted}`,
       error: ''
     };
+  }
+  if (genericMode === 'concat') {
+    return { value: String(value ?? ''), calc: '', error: '' };
+  }
+  if (genericMode === 'cash_credit_type') {
+    const numericValue = Number(String(value ?? '').trim());
+    const out = numericValue === 100 ? 'CASH' : 'BOTH';
+    return { value: out, calc: `${value} -> ${out}`, error: '' };
   }
   return { value, calc: '', error: '' };
 }
@@ -981,6 +1060,13 @@ document.getElementById('fxJsonInput').addEventListener('change', async e => {
 document.getElementById('btnProcess').onclick = runProcessing;
 
 function runProcessing() {
+  const processBtn = document.getElementById('btnProcess');
+  const originalBtnHtml = processBtn.innerHTML;
+  processBtn.disabled = true;
+  processBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Processing...';
+  document.getElementById('processStats').innerHTML = '<div class="alert alert-info py-2 mb-0">Processing in progress...</div>';
+
+  try {
   const t0 = performance.now();
   const errors = [];
   if (!Object.keys(state.fxRates || {}).length) {
@@ -989,8 +1075,8 @@ function runProcessing() {
   const calculations = [];
   const fxCols = state.fx.columns.split(',').map(s=>s.trim()).filter(Boolean);
   const fxRate = state.fx.resolved;
-  const keyLookupCache = {};
   const rowSetCache = {};
+  const keyLookupCache = {};
 
   // Determine base sheet and rows based on mappings.
   // Prefer the active sheet when it participates in mappings, otherwise use the most mapped sheet.
@@ -1017,58 +1103,60 @@ function runProcessing() {
   const baseRowIndex = baseRowIndexes.length ? baseRowIndexes[0] : 1;
   const baseRows = getRowSet(baseSheet, baseRowIndex);
 
+  const preparedMappings = state.mappings
+    .filter(m => m.target)
+    .map(m => {
+      const prepared = { ...m };
+      if (m.sheet !== baseSheet && m.sourceMap && m.targetMap) {
+        const cacheKey = `${m.sheet}::${m.sourceMap}::header_${Number(m.rowIndex) || 1}`;
+        if (!keyLookupCache[cacheKey]) {
+          const mappedSheetRows = getRowSet(m.sheet, m.rowIndex);
+          const lookup = new Map();
+          mappedSheetRows.forEach((r) => {
+            const norm = normalizeJoinKey(r[m.sourceMap]);
+            if (!norm) return;
+            if (!lookup.has(norm)) lookup.set(norm, r);
+          });
+          keyLookupCache[cacheKey] = lookup;
+        }
+        prepared._lookupKey = cacheKey;
+      } else if (m.sheet !== baseSheet) {
+        prepared._mappedRows = getRowSet(m.sheet, m.rowIndex);
+      }
+      return prepared;
+    });
+
   const outRows = baseRows.map((row, idx) => {
     const out = {};
     // 1. Mapping
-    state.mappings.forEach(m => {
-      if (!m.target) return;
-      console.log(`Processing mapping for row ${idx + 1}:`, m);
+    preparedMappings.forEach(m => {
       if (m.source === NEW_COLUMN_SOURCE) {
         out[m.target] = m.newValue ?? '';
-        console.log(`New column: ${m.target} = ${out[m.target]}`);
       } else {
         let mappedRow;
         if (m.sheet === baseSheet) {
-          // Direct mapping from base row
           mappedRow = row;
-          console.log(`Direct mapping from base sheet: mappedRow = row`);
         } else {
-          // Lookup from other sheet
-          const mappedSheetRows = getRowSet(m.sheet, m.rowIndex);
-          console.log(`Mapping from other sheet ${m.sheet}, rows length: ${mappedSheetRows.length}, rowIndex: ${m.rowIndex}, rowIndex-1: ${m.rowIndex - 1}`);
           if (m.sourceMap && m.targetMap) {
-            console.log(`Using lookup: sourceMap=${m.sourceMap}, targetMap=${m.targetMap}, rowIndex=${m.rowIndex}`);
-            const cacheKey = `${m.sheet}::${m.sourceMap}::header_${Number(m.rowIndex) || 1}`;
-            if (!keyLookupCache[cacheKey]) {
-              const lookup = new Map();
-              console.log(`Building lookup from ${mappedSheetRows.length} row(s)`);
-              mappedSheetRows.forEach((r) => {
-                const k = r[m.sourceMap];
-                const norm = normalizeJoinKey(k);
-                if (!norm) return;
-                if (!lookup.has(norm)) lookup.set(norm, r);
-              });
-              keyLookupCache[cacheKey] = lookup;
-              console.log(`Built lookup cache for ${cacheKey}, size: ${lookup.size}`);
-            }
-            const lookup = keyLookupCache[cacheKey];
+            const lookup = keyLookupCache[m._lookupKey];
             const matchKey = row[m.targetMap];
             const normMatch = normalizeJoinKey(matchKey);
-            console.log(`Lookup key from base row[${m.targetMap}]: ${matchKey} -> normalized: ${normMatch}`);
             mappedRow = (normMatch && lookup.get(normMatch)) || {};
-            console.log(`Mapped row found:`, mappedRow);
           } else {
-            // No lookup specified, take from specific row index or corresponding row
             const actualRowIdx = m.rowIndex > 0 ? m.rowIndex - 1 : idx;
-            mappedRow = mappedSheetRows[actualRowIdx] || {};
-            console.log(`No lookup, using rowIndex=${m.rowIndex}, actual array idx=${actualRowIdx}: mappedRow =`, mappedRow);
+            mappedRow = (m._mappedRows || [])[actualRowIdx] || {};
           }
         }
         const mappedValue = m.source ? mappedRow[m.source] ?? '' : '';
-        console.log(`Mapped value from ${m.source}: ${mappedValue}`);
-        const genericResult = applyGenericTransform(mappedValue, m.generic, mappedRow, m.batchSource, row);
+        let finalValue = mappedValue;
+        if (m.generic === 'concat') {
+          const left = mappedRow?.[m.source] ?? '';
+          const right = m.concatSource ? (mappedRow?.[m.concatSource] ?? '') : '';
+          const sep = m.concatSep ?? ' ';
+          finalValue = `${left}${sep}${right}`;
+        }
+        const genericResult = applyGenericTransform(finalValue, m.generic, mappedRow, m.batchSource, row);
         out[m.target] = genericResult.value;
-        console.log(`Final output ${m.target} = ${out[m.target]}`);
         if (m.generic === 'exchange_auto') {
           calculations.push({
             row: idx + 2,
@@ -1092,10 +1180,21 @@ function runProcessing() {
     }
     // 3. Formulas
     state.formulas.forEach(f => {
-      if (!f.name || !f.expr) return;
+      if (!f.name) return;
       try {
-        const scope = buildFormulaScope(row);
-        let val = math.evaluate(f.expr, scope);
+        const formulaSheet = f.sheet || baseSheet;
+        const formulaRows = getRowSet(formulaSheet, 1);
+        const formulaRow = formulaSheet === baseSheet ? row : (formulaRows[idx] || {});
+        let val;
+        if ((f.mode || 'expr') === 'concat') {
+          const a = f.concatA ? (formulaRow[f.concatA] ?? '') : '';
+          const b = f.concatB ? (formulaRow[f.concatB] ?? '') : '';
+          val = `${a}${f.concatSep ?? ' '}${b}`;
+        } else {
+          if (!f.expr) return;
+          const scope = buildFormulaScope(formulaRow);
+          val = math.evaluate(f.expr, scope);
+        }
         if (typeof val === 'number' && !isFinite(val)) { val = 'DIV/0'; throw new Error('Division by zero'); }
         out[f.name] = val;
       } catch (e) {
@@ -1109,6 +1208,10 @@ function runProcessing() {
   const cols = outRows.length ? Object.keys(outRows[0]) : [];
   state.processed = { rows: outRows, errors, columns: cols, calculations, ms: Math.round(performance.now() - t0) };
   renderPreviewArea();
+  } finally {
+    processBtn.disabled = false;
+    processBtn.innerHTML = originalBtnHtml;
+  }
 }
 
 function renderPreviewArea() {
@@ -1183,38 +1286,73 @@ document.getElementById('btnCopyMappingJson').onclick = async () => {
     if (fallback === null) return;
   }
 };
-document.getElementById('btnSaveCfg').onclick = () => {
-  const name = prompt('Configuration name:'); if (!name) return;
-  const all = JSON.parse(localStorage.getItem('excelToolConfigs') || '{}');
-  const versions = all[name] || [];
-  versions.push({
-    version: versions.length + 1,
-    savedAt: new Date().toISOString(),
-    mappings: state.mappings,
-    formulas: state.formulas,
-    fx: state.fx,
-    fxRates: state.fxRates,
-    targetFields: state.targetFields,
-  });
-  all[name] = versions;
-  localStorage.setItem('excelToolConfigs', JSON.stringify(all));
-  alert(`Saved "${name}" (v${versions.length}).`);
+document.getElementById('btnDownloadMappingJson').onclick = () => {
+  const payload = JSON.stringify(state.mappings, null, 2);
+  const blob = new Blob([payload], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'mapping.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
 };
-document.getElementById('btnLoadCfg').onclick = () => {
-  const all = JSON.parse(localStorage.getItem('excelToolConfigs') || '{}');
-  const names = Object.keys(all); if (!names.length) return alert('No saved configurations.');
-  const name = prompt('Load which? ' + names.join(', ')); if (!name || !all[name]) return;
-  const versions = all[name];
-  const v = prompt(`Versions 1..${versions.length} (default latest):`, versions.length);
-  const cfg = versions[(+v || versions.length) - 1]; if (!cfg) return;
-  state.mappings = cfg.mappings || [];
-  state.formulas = cfg.formulas || [];
-  state.fx = cfg.fx || { year:null, quarter:'', month:'', resolved:null, columns:'' };
-  state.fxRates = cfg.fxRates || state.fxRates || generateLast5YearsFxRates();
-  state.targetFields = cfg.targetFields || state.targetFields;
-  alert(`Loaded "${name}" v${cfg.version}.`);
-  gotoStep(2);
-};
+document.getElementById('btnUploadMappingJson').onclick = () => document.getElementById('mappingJsonInput').click();
+document.getElementById('mappingJsonInput').addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const mappings = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.mappings) ? parsed.mappings : null);
+    if (!mappings) throw new Error('Expected a mapping array or object with "mappings".');
+    state.mappings = mappings;
+    gotoStep(2);
+    alert('Mapping JSON uploaded successfully.');
+  } catch (err) {
+    alert('Invalid Mapping JSON: ' + err.message);
+  } finally {
+    e.target.value = '';
+  }
+});
+const btnSaveCfg = document.getElementById('btnSaveCfg');
+if (btnSaveCfg) {
+  btnSaveCfg.onclick = () => {
+    const name = prompt('Configuration name:'); if (!name) return;
+    const all = JSON.parse(localStorage.getItem('excelToolConfigs') || '{}');
+    const versions = all[name] || [];
+    versions.push({
+      version: versions.length + 1,
+      savedAt: new Date().toISOString(),
+      mappings: state.mappings,
+      formulas: state.formulas,
+      fx: state.fx,
+      fxRates: state.fxRates,
+      targetFields: state.targetFields,
+    });
+    all[name] = versions;
+    localStorage.setItem('excelToolConfigs', JSON.stringify(all));
+    alert(`Saved "${name}" (v${versions.length}).`);
+  };
+}
+const btnLoadCfg = document.getElementById('btnLoadCfg');
+if (btnLoadCfg) {
+  btnLoadCfg.onclick = () => {
+    const all = JSON.parse(localStorage.getItem('excelToolConfigs') || '{}');
+    const names = Object.keys(all); if (!names.length) return alert('No saved configurations.');
+    const name = prompt('Load which? ' + names.join(', ')); if (!name || !all[name]) return;
+    const versions = all[name];
+    const v = prompt(`Versions 1..${versions.length} (default latest):`, versions.length);
+    const cfg = versions[(+v || versions.length) - 1]; if (!cfg) return;
+    state.mappings = cfg.mappings || [];
+    state.formulas = cfg.formulas || [];
+    state.fx = cfg.fx || { year:null, quarter:'', month:'', resolved:null, columns:'' };
+    state.fxRates = cfg.fxRates || state.fxRates || generateLast5YearsFxRates();
+    state.targetFields = cfg.targetFields || state.targetFields;
+    alert(`Loaded "${name}" v${cfg.version}.`);
+    gotoStep(2);
+  };
+}
 
 document.getElementById('btnProcess').onclick = () => runProcessing();
 </script>
