@@ -222,6 +222,70 @@ const state = {
   processed: null,       // { rows, errors, columns }
 };
 
+function getSheetDataByName(name) {
+  if (!name) return null;
+  if (state.sheetData[name]) return state.sheetData[name];
+  const foundKey = Object.keys(state.sheetData).find(k => k.toLowerCase() === String(name).toLowerCase());
+  return foundKey ? state.sheetData[foundKey] : null;
+}
+
+function dedupeHeaders(headers) {
+  const seen = {};
+  const out = [];
+  headers.forEach((h, idx) => {
+    const base = String(h ?? '').trim() || `Column_${idx + 1}`;
+    if (!seen[base]) {
+      seen[base] = 1;
+      out.push(base);
+      return;
+    }
+    let n = 2;
+    while (seen[`${base}_${n}`]) n++;
+    const unique = `${base}_${n}`;
+    seen[unique] = 1;
+    out.push(unique);
+  });
+  return out;
+}
+
+function getHeadersForSheetRow(sheetName, rowIndex) {
+  const sheetData = getSheetDataByName(sheetName);
+  if (!sheetData) return [];
+  const idx = Math.max(1, Number(rowIndex) || 1) - 1;
+  const row = sheetData.rawRows?.[idx] || [];
+  if (!row.length) return [];
+  return dedupeHeaders(row);
+}
+
+function getRowsForSheetRow(sheetName, rowIndex) {
+  const sheetData = getSheetDataByName(sheetName);
+  if (!sheetData) return [];
+  const rawRows = sheetData.rawRows || [];
+  const headerIdx = Math.max(1, Number(rowIndex) || 1) - 1;
+  const headerRow = rawRows[headerIdx] || [];
+  if (!headerRow.length) return [];
+  const headers = dedupeHeaders(headerRow);
+  const dataRows = rawRows.slice(headerIdx + 1);
+  return dataRows.map(r => {
+    const out = {};
+    headers.forEach((h, i) => { out[h] = r?.[i] ?? ''; });
+    return out;
+  });
+}
+
+function normalizeJoinKey(value) {
+  if (value == null) return '';
+  const raw = String(value).trim();
+  if (!raw) return '';
+  const compact = raw.replace(/\s+/g, ' ');
+  const numericLike = compact.replace(/,/g, '');
+  if (/^-?\d+(\.\d+)?$/.test(numericLike)) {
+    const num = Number(numericLike);
+    if (!Number.isNaN(num)) return String(num);
+  }
+  return compact.toLowerCase();
+}
+
 /* ============================================================
    Stepper navigation
 ============================================================ */
@@ -313,40 +377,44 @@ function handleFile(file) {
 }
 
 function loadSheet(name) {
+  console.log(`Loading sheet: ${name}`);
   state.sheetName = name;
   const ws = state.workbook.Sheets[name];
   const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  // Assume headers in row 2 (index 1)
-  const headerRow = rawRows[1] || [];
+  console.log(`Raw rows length: ${rawRows.length}`);
+  // Assume headers in row 1 (index 0)
+  const headerRow = rawRows[0] || [];
+  console.log(`Header row:`, headerRow);
   const json = XLSX.utils.sheet_to_json(ws, { header: headerRow, defval: '' });
   if (!json.length) { setStatus('❌ Selected sheet is empty.', 'danger'); return; }
 
   // dedupe headers
   const rawHeaders = Object.keys(json[0]);
-  const seen = {}; const headers = [];
-  rawHeaders.forEach(h => { if (seen[h]) { let i=2; while (seen[h+'_'+i]) i++; const n=h+'_'+i; seen[n]=1; headers.push(n);} else { seen[h]=1; headers.push(h);} });
+  const headers = dedupeHeaders(rawHeaders);
 
   // remap rows if renames happened
   const renamed = headers.some((h,i) => h !== rawHeaders[i]);
   state.rows = renamed ? json.map(r => { const o={}; rawHeaders.forEach((h,i)=> o[headers[i]] = r[h]); return o; }) : json;
   state.sourceCols = headers;
   state.sheetData[name] = { rows: state.rows, sourceCols: headers, rawRows };
+  console.log(`Loaded sheet ${name}: ${state.rows.length} rows, columns:`, headers);
 
   // Cache all sheets to support per-mapping sheet+source selection.
   state.workbook.SheetNames.forEach(sheet => {
-    if (state.sheetData[sheet]) return;
+    if (getSheetDataByName(sheet)) return;
     const sh = state.workbook.Sheets[sheet];
     const rawRowsLocal = XLSX.utils.sheet_to_json(sh, { header: 1, defval: '' });
     if (!rawRowsLocal.length) {
       state.sheetData[sheet] = { rows: [], sourceCols: [], rawRows: [] };
       return;
     }
-    // Use row 2 as header for other sheets
-    const headerRow = rawRowsLocal[1] || [];
+    // Use row 1 as header for other sheets
+    const headerRow = rawRowsLocal[0] || [];
     const data = XLSX.utils.sheet_to_json(sh, { header: headerRow, defval: '' });
-    const sourceCols = headerRow;
+    const sourceCols = dedupeHeaders(headerRow);
     state.sheetData[sheet] = { rows: data, sourceCols, rawRows: rawRowsLocal };
   });
+  console.log('All sheets loaded, sheetData:', Object.keys(state.sheetData));
 
   // initial mapping suggestions
   state.mappings = headers.slice(0, 8).map(h => ({
@@ -384,6 +452,10 @@ function renderFilePreview() {
    STEP 2 — Mapping
 ============================================================ */
 function renderMapping() {
+  console.log('Rendering mapping table');
+  console.log('Current mappings:', state.mappings);
+  console.log('Sheet names:', state.workbook?.SheetNames);
+  console.log('Sheet data keys:', Object.keys(state.sheetData || {}));
   const tbody = document.getElementById('mapTableBody');
   const sheetNames = state.workbook?.SheetNames || [];
   state.mappings = state.mappings.map(m => ({
@@ -419,10 +491,12 @@ function renderMapping() {
         <select class="form-select form-select-sm" data-i="${i}" data-k="sourceMap">
           <option value="">— select —</option>
           ${(() => {
-            const sheetData = state.sheetData[m.sheet];
-            if (!sheetData || !sheetData.rawRows || sheetData.rawRows.length < m.rowIndex) return '';
-            const row = sheetData.rawRows[m.rowIndex - 1] || [];
-            return [...new Set(row)].filter(v => v != null && v !== '').map(v => `<option ${v===m.sourceMap?'selected':''}>${v}</option>`).join('');
+            const sheetData = getSheetDataByName(m.sheet);
+            const cols = getHeadersForSheetRow(m.sheet, m.rowIndex);
+            console.log(`SourceMap dropdown for mapping ${i}: sheet="${m.sheet}", sheetData found:`, !!sheetData, `cols: [${cols.join(', ')}]`, `current value: "${m.sourceMap}"`);
+            if (!sheetData) { console.warn(`❌ No sheet data for ${m.sheet}, available keys:`, Object.keys(state.sheetData)); return `<option disabled style="color:red">No columns available</option>`; }
+            if (!cols.length) { console.warn(`⚠️ No columns in sheet ${m.sheet}`); return `<option disabled>No columns</option>`; }
+            return cols.map(col => `<option value="${col}" ${col === m.sourceMap ? 'selected' : ''}>${col}</option>`).join('');
           })()}
         </select>
       </td>
@@ -439,27 +513,24 @@ function renderMapping() {
         <select class="form-select form-select-sm" data-i="${i}" data-k="targetMap">
           <option value="">— select —</option>
           ${(() => {
-            const sheetData = state.sheetData[m.targetSheet];
-            if (!sheetData || !sheetData.rawRows || sheetData.rawRows.length < m.targetRowIndex) return '';
-            const row = sheetData.rawRows[m.targetRowIndex - 1] || [];
-            return [...new Set(row)].filter(v => v != null && v !== '').map(v => `<option ${v===m.targetMap?'selected':''}>${v}</option>`).join('');
+            const target = m.targetSheet || m.sheet;
+            const cols = getHeadersForSheetRow(target, m.targetRowIndex);
+            const isDefault = !m.targetSheet;
+            const label = isDefault ? `(from ${target})` : '';
+            console.log(`TargetMap dropdown for mapping ${i}: targetSheet="${m.targetSheet}", using sheet="${target}", cols: [${cols.join(', ')}], current: "${m.targetMap}"`);
+            if (!getSheetDataByName(target)) { console.warn(`❌ No sheet data for target ${target}`); return `<option disabled style="color:red">No columns</option>`; }
+            if (!cols.length) { console.warn(`⚠️ No columns in target sheet ${target}`); return `<option disabled>No columns</option>`; }
+            return cols.map(col => `<option value="${col}" ${col === m.targetMap ? 'selected' : ''}>${col} ${isDefault && col === m.targetMap ? label : ''}</option>`).join('');
           })()}
         </select>
       </td>
-      <td>
+          <td>
         <select class="form-select form-select-sm" data-i="${i}" data-k="source">
           <option value="">— select —</option>
           <option value="${NEW_COLUMN_SOURCE}" ${m.source===NEW_COLUMN_SOURCE?'selected':''}>+ Create New Column</option>
           ${(() => {
-            const sheetData = state.sheetData[m.sheet];
-            if (!sheetData || !sheetData.rawRows || sheetData.rawRows.length < m.rowIndex) return '';
-            const row = sheetData.rawRows[m.rowIndex - 1] || [];
-            const uniqueValues = [...new Set(row)].filter(v => v != null && v !== '');
-            return uniqueValues.map(v => {
-              const idx = row.indexOf(v);
-              const col = sheetData.sourceCols[idx];
-              return `<option value="${col}" ${col === m.source ? 'selected' : ''}>${v}</option>`;
-            }).join('');
+            const cols = getHeadersForSheetRow(m.sheet, m.rowIndex);
+            return cols.map(col => `<option value="${col}" ${col === m.source ? 'selected' : ''}>${col}</option>`).join('');
           })()}
         </select>
         <input class="form-control form-control-sm mt-1 ${m.source===NEW_COLUMN_SOURCE?'':'d-none'}" placeholder="Default value (optional)" value="${m.newValue??''}" data-i="${i}" data-k="newValue" />
@@ -477,15 +548,9 @@ function renderMapping() {
         <select class="form-select form-select-sm mt-1 ${m.generic==='exchange_auto'?'':'d-none'}" data-i="${i}" data-k="batchSource">
           <option value="">batchid column — select —</option>
           ${(() => {
-            const sheetData = state.sheetData[m.sheet];
-            if (!sheetData || !sheetData.rawRows || sheetData.rawRows.length < m.rowIndex) return '';
-            const row = sheetData.rawRows[m.rowIndex - 1] || [];
-            const uniqueValues = [...new Set(row)].filter(v => v != null && v !== '');
-            return uniqueValues.map(v => {
-              const idx = row.indexOf(v);
-              const col = sheetData.sourceCols[idx];
-              return `<option ${col === m.batchSource ? 'selected' : ''}>${v}</option>`;
-            }).join('');
+            const sheetData = getSheetDataByName(m.sheet);
+            if (!sheetData) return '';
+            return sheetData.sourceCols.map(col => `<option value="${col}" ${col === m.batchSource ? 'selected' : ''}>${col}</option>`).join('');
           })()}
         </select>
       </td>
@@ -499,20 +564,25 @@ function renderMapping() {
   tbody.querySelectorAll('select,input').forEach(el => {
     el.onchange = () => {
       const i = +el.dataset.i, k = el.dataset.k;
+      console.log(`Mapping change: row ${i}, key ${k}, old value: ${state.mappings[i][k]}, new value: ${el.type === 'checkbox' ? el.checked : el.value}`);
       state.mappings[i][k] = el.type === 'checkbox' ? el.checked : el.value;
       if (k === 'sheet') {
-        const validCols = (state.sheetData[state.mappings[i].sheet]?.sourceCols) || [];
+        console.log(`Sheet changed to ${state.mappings[i].sheet}`);
+        const validCols = (getSheetDataByName(state.mappings[i].sheet)?.sourceCols) || [];
         if (state.mappings[i].source !== NEW_COLUMN_SOURCE && !validCols.includes(state.mappings[i].source)) {
+          console.log(`Source column ${state.mappings[i].source} not valid, clearing`);
           state.mappings[i].source = '';
         }
         // sourceMap is now a value, not a column, so no need to validate
         if (state.mappings[i].batchSource && !validCols.includes(state.mappings[i].batchSource)) {
+          console.log(`Batch source ${state.mappings[i].batchSource} not valid, clearing`);
           state.mappings[i].batchSource = '';
         }
         // Auto-select target sheet to match source sheet when target is empty
         if (!state.mappings[i].targetSheet) {
           state.mappings[i].targetSheet = state.mappings[i].sheet;
           state.mappings[i].targetRowIndex = state.mappings[i].rowIndex;
+          console.log(`Auto-set target sheet to ${state.mappings[i].targetSheet}`);
         }
         // Set rowIndex default to 1 when sheet changes
         state.mappings[i].rowIndex = 1;
@@ -523,55 +593,63 @@ function renderMapping() {
         renderMapping();
       }
       if (k === 'rowIndex') {
-        // Clear sourceMap when row index changes
-        state.mappings[i].sourceMap = '';
-        // Clear batchSource when row index changes
-        state.mappings[i].batchSource = '';
+        console.log(`Row index changed to ${state.mappings[i].rowIndex} for mapping ${i}`);
+        console.log(`Mapping state before update:`, state.mappings[i]);
+        const rowHeaders = getHeadersForSheetRow(state.mappings[i].sheet, state.mappings[i].rowIndex);
+        if (state.mappings[i].sourceMap && !rowHeaders.includes(state.mappings[i].sourceMap)) {
+          state.mappings[i].sourceMap = '';
+        }
+        if (state.mappings[i].source !== NEW_COLUMN_SOURCE && state.mappings[i].source && !rowHeaders.includes(state.mappings[i].source)) {
+          state.mappings[i].source = '';
+        }
+        if (state.mappings[i].batchSource && !rowHeaders.includes(state.mappings[i].batchSource)) {
+          state.mappings[i].batchSource = '';
+        }
+        console.log(`Mapping state after update:`, state.mappings[i]);
         renderMapping();
       }
       if (k === 'sourceMap') {
-        // Map the selected row value to the actual source column key
-        const sheetData = state.sheetData[state.mappings[i].sheet];
-        if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= state.mappings[i].rowIndex) {
-          const row = sheetData.rawRows[state.mappings[i].rowIndex - 1] || [];
-          const idx = row.findIndex(v => v == el.value);
-          if (idx >= 0 && sheetData.sourceCols[idx]) {
-            state.mappings[i].sourceMap = sheetData.sourceCols[idx];
-          }
-        }
+        // Set the source map column
+        state.mappings[i].sourceMap = el.value;
+        console.log(`✅ SourceMap changed for mapping ${i}:`, {
+          to: `"${state.mappings[i].sourceMap}"`,
+          sheet: state.mappings[i].sheet,
+          rowIndex: state.mappings[i].rowIndex,
+          targetMap: state.mappings[i].targetMap
+        });
         renderMapping();
       }
       if (k === 'batchSource') {
         // Set the batch source column
         state.mappings[i].batchSource = el.value;
+        console.log(`Batch source set to ${state.mappings[i].batchSource}`);
         renderMapping();
       }
       if (k === 'targetSheet') {
+        console.log(`Target sheet changed from "${el.dataset.oldValue}" to "${state.mappings[i].targetSheet}"`);
         // Clear targetMap when target sheet changes
         state.mappings[i].targetMap = '';
+        console.log(`Cleared targetMap, mapping now:`, state.mappings[i]);
         renderMapping();
       }
       if (k === 'targetRowIndex') {
+        console.log(`Target row index changed to ${state.mappings[i].targetRowIndex}`);
         // Clear targetMap when target row index changes
         state.mappings[i].targetMap = '';
         renderMapping();
       }
       if (k === 'targetMap') {
-        // Map the selected target row value to the actual target column key
-        const sheetData = state.sheetData[state.mappings[i].targetSheet];
-        if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= state.mappings[i].targetRowIndex) {
-          const row = sheetData.rawRows[state.mappings[i].targetRowIndex - 1] || [];
-          const idx = row.findIndex(v => v == el.value);
-          if (idx >= 0 && sheetData.sourceCols[idx]) {
-            state.mappings[i].targetMap = sheetData.sourceCols[idx];
-          }
-        }
+        // Set the target map column
+        state.mappings[i].targetMap = el.value;
+        console.log(`Target map set to "${state.mappings[i].targetMap}" for mapping ${i}`);
+        console.log(`Current mapping state:`, state.mappings[i]);
         renderMapping();
       }
       if (k === 'source') {
         if (state.mappings[i].source !== NEW_COLUMN_SOURCE) {
           state.mappings[i].newValue = '';
           state.mappings[i].source = el.value;
+          console.log(`Source column set to ${state.mappings[i].source}`);
         }
         renderMapping();
       }
@@ -586,9 +664,14 @@ function renderMapping() {
       el.oninput = el.onchange;
     }
   });
-  tbody.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { state.mappings.splice(+b.dataset.del,1); renderMapping(); });
+  tbody.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { 
+    console.log(`Deleting mapping at index ${b.dataset.del}`);
+    state.mappings.splice(+b.dataset.del,1); 
+    renderMapping(); 
+  });
 }
 document.getElementById('btnAddMapRow').onclick = () => {
+  console.log('Adding new mapping row');
   const defaultSheet = state.sheetName || '';
   state.mappings.push({
     sheet: defaultSheet,
@@ -636,12 +719,12 @@ function previewFormula(i) {
     if (m.sheet) acc[m.sheet] = (acc[m.sheet] || 0) + 1;
     return acc;
   }, {});
-  const baseSheet = (mappingCounts['Raw'] && state.sheetData['Raw'])
+  const baseSheet = (mappingCounts['Raw'] && getSheetDataByName('Raw'))
     ? 'Raw'
     : (state.sheetName && mappingCounts[state.sheetName])
       ? state.sheetName
       : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
-  const baseRows = state.sheetData[baseSheet]?.rows || state.rows;
+  const baseRows = getSheetDataByName(baseSheet)?.rows || state.rows;
   const sample = baseRows[0] || {};
   try {
     const scope = buildFormulaScope(sample);
@@ -907,6 +990,7 @@ function runProcessing() {
   const fxCols = state.fx.columns.split(',').map(s=>s.trim()).filter(Boolean);
   const fxRate = state.fx.resolved;
   const keyLookupCache = {};
+  const rowSetCache = {};
 
   // Determine base sheet and rows based on mappings.
   // Prefer the active sheet when it participates in mappings, otherwise use the most mapped sheet.
@@ -914,52 +998,77 @@ function runProcessing() {
     if (m.sheet) acc[m.sheet] = (acc[m.sheet] || 0) + 1;
     return acc;
   }, {});
-  const baseSheet = (mappingCounts['Raw'] && state.sheetData['Raw'])
+  const baseSheet = (mappingCounts['Raw'] && getSheetDataByName('Raw'))
     ? 'Raw'
     : (state.sheetName && mappingCounts[state.sheetName])
       ? state.sheetName
       : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
-  const baseRows = state.sheetData[baseSheet]?.rows || state.rows;
+  const getRowSet = (sheetName, rowIndex) => {
+    const key = `${sheetName}::${Number(rowIndex) || 1}`;
+    if (!rowSetCache[key]) {
+      rowSetCache[key] = getRowsForSheetRow(sheetName, rowIndex);
+    }
+    return rowSetCache[key];
+  };
+
+  const baseRowIndexes = state.mappings
+    .filter(m => m.sheet === baseSheet)
+    .map(m => Number(m.rowIndex) || 1);
+  const baseRowIndex = baseRowIndexes.length ? baseRowIndexes[0] : 1;
+  const baseRows = getRowSet(baseSheet, baseRowIndex);
 
   const outRows = baseRows.map((row, idx) => {
     const out = {};
     // 1. Mapping
     state.mappings.forEach(m => {
       if (!m.target) return;
+      console.log(`Processing mapping for row ${idx + 1}:`, m);
       if (m.source === NEW_COLUMN_SOURCE) {
         out[m.target] = m.newValue ?? '';
+        console.log(`New column: ${m.target} = ${out[m.target]}`);
       } else {
         let mappedRow;
         if (m.sheet === baseSheet) {
           // Direct mapping from base row
           mappedRow = row;
+          console.log(`Direct mapping from base sheet: mappedRow = row`);
         } else {
           // Lookup from other sheet
-          const mappedSheetRows = state.sheetData[m.sheet]?.rows || [];
+          const mappedSheetRows = getRowSet(m.sheet, m.rowIndex);
+          console.log(`Mapping from other sheet ${m.sheet}, rows length: ${mappedSheetRows.length}, rowIndex: ${m.rowIndex}, rowIndex-1: ${m.rowIndex - 1}`);
           if (m.sourceMap && m.targetMap) {
-            const cacheKey = `${m.sheet}::${m.sourceMap}`;
+            console.log(`Using lookup: sourceMap=${m.sourceMap}, targetMap=${m.targetMap}, rowIndex=${m.rowIndex}`);
+            const cacheKey = `${m.sheet}::${m.sourceMap}::header_${Number(m.rowIndex) || 1}`;
             if (!keyLookupCache[cacheKey]) {
               const lookup = new Map();
-              mappedSheetRows.forEach(r => {
+              console.log(`Building lookup from ${mappedSheetRows.length} row(s)`);
+              mappedSheetRows.forEach((r) => {
                 const k = r[m.sourceMap];
-                if (k === '' || k == null) return;
-                const norm = String(k).trim();
+                const norm = normalizeJoinKey(k);
                 if (!norm) return;
                 if (!lookup.has(norm)) lookup.set(norm, r);
               });
               keyLookupCache[cacheKey] = lookup;
+              console.log(`Built lookup cache for ${cacheKey}, size: ${lookup.size}`);
             }
             const lookup = keyLookupCache[cacheKey];
             const matchKey = row[m.targetMap];
-            const normMatch = matchKey == null ? '' : String(matchKey).trim();
+            const normMatch = normalizeJoinKey(matchKey);
+            console.log(`Lookup key from base row[${m.targetMap}]: ${matchKey} -> normalized: ${normMatch}`);
             mappedRow = (normMatch && lookup.get(normMatch)) || {};
+            console.log(`Mapped row found:`, mappedRow);
           } else {
-            mappedRow = {};
+            // No lookup specified, take from specific row index or corresponding row
+            const actualRowIdx = m.rowIndex > 0 ? m.rowIndex - 1 : idx;
+            mappedRow = mappedSheetRows[actualRowIdx] || {};
+            console.log(`No lookup, using rowIndex=${m.rowIndex}, actual array idx=${actualRowIdx}: mappedRow =`, mappedRow);
           }
         }
         const mappedValue = m.source ? mappedRow[m.source] ?? '' : '';
+        console.log(`Mapped value from ${m.source}: ${mappedValue}`);
         const genericResult = applyGenericTransform(mappedValue, m.generic, mappedRow, m.batchSource, row);
         out[m.target] = genericResult.value;
+        console.log(`Final output ${m.target} = ${out[m.target]}`);
         if (m.generic === 'exchange_auto') {
           calculations.push({
             row: idx + 2,
