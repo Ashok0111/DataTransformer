@@ -332,35 +332,15 @@ function loadSheet(name) {
     if (state.sheetData[sheet]) return;
     const sh = state.workbook.Sheets[sheet];
     const rawRowsLocal = XLSX.utils.sheet_to_json(sh, { header: 1, defval: '' });
-    const data = XLSX.utils.sheet_to_json(sh, { defval: '' });
-    if (!data.length) {
-      state.sheetData[sheet] = { rows: [], sourceCols: [], rawRows: rawRowsLocal };
+    if (!rawRowsLocal.length) {
+      state.sheetData[sheet] = { rows: [], sourceCols: [], rawRows: [] };
       return;
     }
-    const raw = Object.keys(data[0]);
-    const seenLocal = {};
-    const deduped = [];
-    raw.forEach(h => {
-      if (seenLocal[h]) {
-        let i = 2;
-        while (seenLocal[h + '_' + i]) i++;
-        const n = h + '_' + i;
-        seenLocal[n] = 1;
-        deduped.push(n);
-      } else {
-        seenLocal[h] = 1;
-        deduped.push(h);
-      }
-    });
-    const renamedLocal = deduped.some((h, i) => h !== raw[i]);
-    const rowsLocal = renamedLocal
-      ? data.map(r => {
-          const o = {};
-          raw.forEach((h, i) => { o[deduped[i]] = r[h]; });
-          return o;
-        })
-      : data;
-    state.sheetData[sheet] = { rows: rowsLocal, sourceCols: deduped, rawRows: rawRowsLocal };
+    // Assume header in row 2 (index 1) for other sheets
+    const headerRow = rawRowsLocal[1] || [];
+    const data = XLSX.utils.sheet_to_json(sh, { header: headerRow, defval: '' });
+    const sourceCols = headerRow;
+    state.sheetData[sheet] = { rows: data, sourceCols, rawRows: rawRowsLocal };
   });
 
   // initial mapping suggestions
@@ -415,6 +395,29 @@ function renderMapping() {
     mandatory: Boolean(m.mandatory),
     newValue: m.newValue ?? ''
   }));
+  // Ensure source and target are set if sourceMap/targetMap are set
+  state.mappings.forEach(m => {
+    if (m.sourceMap && !m.source && m.source !== NEW_COLUMN_SOURCE) {
+      const sheetData = state.sheetData[m.sheet];
+      if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= m.rowIndex) {
+        const row = sheetData.rawRows[m.rowIndex - 1] || [];
+        const idx = row.findIndex(v => v == m.sourceMap);
+        if (idx >= 0 && sheetData.sourceCols[idx]) {
+          m.source = sheetData.sourceCols[idx];
+        }
+      }
+    }
+    if (m.targetMap && !m.target) {
+      const sheetData = state.sheetData[m.targetSheet];
+      if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= m.targetRowIndex) {
+        const row = sheetData.rawRows[m.targetRowIndex - 1] || [];
+        const idx = row.findIndex(v => v == m.targetMap);
+        if (idx >= 0 && sheetData.sourceCols[idx]) {
+          m.target = sheetData.sourceCols[idx];
+        }
+      }
+    }
+  });
   tbody.innerHTML = state.mappings.map((m, i) => `
     <tr class="map-row">
       <td>
@@ -461,7 +464,17 @@ function renderMapping() {
         <select class="form-select form-select-sm" data-i="${i}" data-k="source">
           <option value="">— select —</option>
           <option value="${NEW_COLUMN_SOURCE}" ${m.source===NEW_COLUMN_SOURCE?'selected':''}>+ Create New Column</option>
-          ${((state.sheetData[m.sheet]?.sourceCols) || []).map(c => `<option ${c===m.source?'selected':''}>${c}</option>`).join('')}
+          ${(() => {
+            const sheetData = state.sheetData[m.sheet];
+            if (!sheetData || !sheetData.rawRows || sheetData.rawRows.length < m.rowIndex) return '';
+            const row = sheetData.rawRows[m.rowIndex - 1] || [];
+            const uniqueValues = [...new Set(row)].filter(v => v != null && v !== '');
+            return uniqueValues.map(v => {
+              const idx = row.indexOf(v);
+              const col = sheetData.sourceCols[idx];
+              return `<option ${col === m.source ? 'selected' : ''}>${v}</option>`;
+            }).join('');
+          })()}
         </select>
         <input class="form-control form-control-sm mt-1 ${m.source===NEW_COLUMN_SOURCE?'':'d-none'}" placeholder="Default value (optional)" value="${m.newValue??''}" data-i="${i}" data-k="newValue" />
       </td>
@@ -560,6 +573,15 @@ function renderMapping() {
       if (k === 'source') {
         if (state.mappings[i].source !== NEW_COLUMN_SOURCE) {
           state.mappings[i].newValue = '';
+          // Map the selected row value to the actual source column key
+          const sheetData = state.sheetData[state.mappings[i].sheet];
+          if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= state.mappings[i].rowIndex) {
+            const row = sheetData.rawRows[state.mappings[i].rowIndex - 1] || [];
+            const idx = row.findIndex(v => v == el.value);
+            if (idx >= 0 && sheetData.sourceCols[idx]) {
+              state.mappings[i].source = sheetData.sourceCols[idx];
+            }
+          }
         }
         renderMapping();
       }
