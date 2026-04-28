@@ -300,7 +300,9 @@ function handleFile(file) {
       sel.innerHTML = wb.SheetNames.map(n => `<option>${n}</option>`).join('');
       picker.classList.remove('d-none');
       sel.onchange = () => loadSheet(sel.value);
-      loadSheet(wb.SheetNames[0]);
+      const defaultSheet = wb.SheetNames.includes('Raw') ? 'Raw' : wb.SheetNames[0];
+      sel.value = defaultSheet;
+      loadSheet(defaultSheet);
       setStatus(`✅ Loaded <strong>${file.name}</strong> — ${wb.SheetNames.length} sheet(s).`, 'success');
     } catch (err) {
       setStatus('❌ Corrupted or unreadable file: ' + err.message, 'danger');
@@ -336,8 +338,8 @@ function loadSheet(name) {
       state.sheetData[sheet] = { rows: [], sourceCols: [], rawRows: [] };
       return;
     }
-    // Assume header in row 2 (index 1) for other sheets
-    const headerRow = rawRowsLocal[1] || [];
+    // Use the first row as header for other sheets by default.
+    const headerRow = rawRowsLocal[0] || [];
     const data = XLSX.utils.sheet_to_json(sh, { header: headerRow, defval: '' });
     const sourceCols = headerRow;
     state.sheetData[sheet] = { rows: data, sourceCols, rawRows: rawRowsLocal };
@@ -672,9 +674,11 @@ function previewFormula(i) {
     if (m.sheet) acc[m.sheet] = (acc[m.sheet] || 0) + 1;
     return acc;
   }, {});
-  const baseSheet = (state.sheetName && mappingCounts[state.sheetName])
-    ? state.sheetName
-    : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
+  const baseSheet = (mappingCounts['Raw'] && state.sheetData['Raw'])
+    ? 'Raw'
+    : (state.sheetName && mappingCounts[state.sheetName])
+      ? state.sheetName
+      : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
   const baseRows = state.sheetData[baseSheet]?.rows || state.rows;
   const sample = baseRows[0] || {};
   try {
@@ -948,9 +952,11 @@ function runProcessing() {
     if (m.sheet) acc[m.sheet] = (acc[m.sheet] || 0) + 1;
     return acc;
   }, {});
-  const baseSheet = (state.sheetName && mappingCounts[state.sheetName])
-    ? state.sheetName
-    : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
+  const baseSheet = (mappingCounts['Raw'] && state.sheetData['Raw'])
+    ? 'Raw'
+    : (state.sheetName && mappingCounts[state.sheetName])
+      ? state.sheetName
+      : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
   const baseRows = state.sheetData[baseSheet]?.rows || state.rows;
 
   const outRows = baseRows.map((row, idx) => {
