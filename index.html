@@ -668,8 +668,13 @@ function renderFormulas() {
 function previewFormula(i) {
   const f = state.formulas[i]; const out = document.getElementById('fxPrev_'+i); if (!out) return;
   if (!f.expr) { out.textContent = '—'; out.className='small text-muted'; return; }
-  // Determine base sheet and rows for preview
-  const baseSheet = state.mappings.find(m => m.sheet !== state.sheetName)?.sheet || state.sheetName;
+  const mappingCounts = state.mappings.reduce((acc, m) => {
+    if (m.sheet) acc[m.sheet] = (acc[m.sheet] || 0) + 1;
+    return acc;
+  }, {});
+  const baseSheet = (state.sheetName && mappingCounts[state.sheetName])
+    ? state.sheetName
+    : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
   const baseRows = state.sheetData[baseSheet]?.rows || state.rows;
   const sample = baseRows[0] || {};
   try {
@@ -937,8 +942,15 @@ function runProcessing() {
   const fxRate = state.fx.resolved;
   const keyLookupCache = {};
 
-  // Determine base sheet and rows based on mappings
-  const baseSheet = state.mappings.find(m => m.sheet !== state.sheetName)?.sheet || state.sheetName;
+  // Determine base sheet and rows based on mappings.
+  // Prefer the active sheet when it participates in mappings, otherwise use the most mapped sheet.
+  const mappingCounts = state.mappings.reduce((acc, m) => {
+    if (m.sheet) acc[m.sheet] = (acc[m.sheet] || 0) + 1;
+    return acc;
+  }, {});
+  const baseSheet = (state.sheetName && mappingCounts[state.sheetName])
+    ? state.sheetName
+    : Object.keys(mappingCounts).sort((a, b) => (mappingCounts[b] - mappingCounts[a]))[0] || state.sheetName;
   const baseRows = state.sheetData[baseSheet]?.rows || state.rows;
 
   const outRows = baseRows.map((row, idx) => {
