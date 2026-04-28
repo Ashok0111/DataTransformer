@@ -490,7 +490,17 @@ function renderMapping() {
         </select>
         <select class="form-select form-select-sm mt-1 ${m.generic==='exchange_auto'?'':'d-none'}" data-i="${i}" data-k="batchSource">
           <option value="">batchid column — select —</option>
-          ${((state.sheetData[m.sheet]?.sourceCols) || []).map(c => `<option ${c===m.batchSource?'selected':''}>${c}</option>`).join('')}
+          ${(() => {
+            const sheetData = state.sheetData[m.sheet];
+            if (!sheetData || !sheetData.rawRows || sheetData.rawRows.length < m.rowIndex) return '';
+            const row = sheetData.rawRows[m.rowIndex - 1] || [];
+            const uniqueValues = [...new Set(row)].filter(v => v != null && v !== '');
+            return uniqueValues.map(v => {
+              const idx = row.indexOf(v);
+              const col = sheetData.sourceCols[idx];
+              return `<option ${col === m.batchSource ? 'selected' : ''}>${v}</option>`;
+            }).join('');
+          })()}
         </select>
       </td>
       <td class="text-center">
@@ -522,11 +532,15 @@ function renderMapping() {
         state.mappings[i].rowIndex = 1;
         // Clear sourceMap since row changed
         state.mappings[i].sourceMap = '';
+        // Clear batchSource since row changed
+        state.mappings[i].batchSource = '';
         renderMapping();
       }
       if (k === 'rowIndex') {
         // Clear sourceMap when row index changes
         state.mappings[i].sourceMap = '';
+        // Clear batchSource when row index changes
+        state.mappings[i].batchSource = '';
         renderMapping();
       }
       if (k === 'sourceMap') {
@@ -544,6 +558,18 @@ function renderMapping() {
             if (!state.mappings[i].targetRowIndex) {
               state.mappings[i].targetRowIndex = state.mappings[i].rowIndex;
             }
+          }
+        }
+        renderMapping();
+      }
+      if (k === 'batchSource') {
+        // Map the selected row value to the actual batchSource column key
+        const sheetData = state.sheetData[state.mappings[i].sheet];
+        if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= state.mappings[i].rowIndex) {
+          const row = sheetData.rawRows[state.mappings[i].rowIndex - 1] || [];
+          const idx = row.findIndex(v => v == el.value);
+          if (idx >= 0 && sheetData.sourceCols[idx]) {
+            state.mappings[i].batchSource = sheetData.sourceCols[idx];
           }
         }
         renderMapping();
@@ -642,7 +668,10 @@ function renderFormulas() {
 function previewFormula(i) {
   const f = state.formulas[i]; const out = document.getElementById('fxPrev_'+i); if (!out) return;
   if (!f.expr) { out.textContent = '—'; out.className='small text-muted'; return; }
-  const sample = state.rows[0] || {};
+  // Determine base sheet and rows for preview
+  const baseSheet = state.mappings.find(m => m.sheet !== state.sheetName)?.sheet || state.sheetName;
+  const baseRows = state.sheetData[baseSheet]?.rows || state.rows;
+  const sample = baseRows[0] || {};
   try {
     const scope = buildFormulaScope(sample);
     const v = math.evaluate(f.expr, scope);
@@ -908,7 +937,11 @@ function runProcessing() {
   const fxRate = state.fx.resolved;
   const keyLookupCache = {};
 
-  const outRows = state.rows.map((row, idx) => {
+  // Determine base sheet and rows based on mappings
+  const baseSheet = state.mappings.find(m => m.sheet !== state.sheetName)?.sheet || state.sheetName;
+  const baseRows = state.sheetData[baseSheet]?.rows || state.rows;
+
+  const outRows = baseRows.map((row, idx) => {
     const out = {};
     // 1. Mapping
     state.mappings.forEach(m => {
@@ -916,29 +949,34 @@ function runProcessing() {
       if (m.source === NEW_COLUMN_SOURCE) {
         out[m.target] = m.newValue ?? '';
       } else {
-        const mappedSheetRows = state.sheetData[m.sheet]?.rows || [];
-        let mappedRow = mappedSheetRows[idx] || {};
-
-        // If key mapping is configured, perform one-to-one row match using source_map/target_map.
-        if (m.sourceMap && m.targetMap) {
-          const cacheKey = `${m.sheet}::${m.sourceMap}`;
-          if (!keyLookupCache[cacheKey]) {
-            const lookup = new Map();
-            mappedSheetRows.forEach(r => {
-              const k = r[m.sourceMap];
-              if (k === '' || k == null) return;
-              const norm = String(k).trim();
-              if (!norm) return;
-              if (!lookup.has(norm)) lookup.set(norm, r);
-            });
-            keyLookupCache[cacheKey] = lookup;
+        let mappedRow;
+        if (m.sheet === baseSheet) {
+          // Direct mapping from base row
+          mappedRow = row;
+        } else {
+          // Lookup from other sheet
+          const mappedSheetRows = state.sheetData[m.sheet]?.rows || [];
+          if (m.sourceMap && m.targetMap) {
+            const cacheKey = `${m.sheet}::${m.sourceMap}`;
+            if (!keyLookupCache[cacheKey]) {
+              const lookup = new Map();
+              mappedSheetRows.forEach(r => {
+                const k = r[m.sourceMap];
+                if (k === '' || k == null) return;
+                const norm = String(k).trim();
+                if (!norm) return;
+                if (!lookup.has(norm)) lookup.set(norm, r);
+              });
+              keyLookupCache[cacheKey] = lookup;
+            }
+            const lookup = keyLookupCache[cacheKey];
+            const matchKey = row[m.targetMap];
+            const normMatch = matchKey == null ? '' : String(matchKey).trim();
+            mappedRow = (normMatch && lookup.get(normMatch)) || {};
+          } else {
+            mappedRow = {};
           }
-          const lookup = keyLookupCache[cacheKey];
-          const matchKey = row[m.targetMap];
-          const normMatch = matchKey == null ? '' : String(matchKey).trim();
-          mappedRow = (normMatch && lookup.get(normMatch)) || {};
         }
-
         const mappedValue = m.source ? mappedRow[m.source] ?? '' : '';
         const genericResult = applyGenericTransform(mappedValue, m.generic, mappedRow, m.batchSource, row);
         out[m.target] = genericResult.value;
@@ -946,7 +984,6 @@ function runProcessing() {
           calculations.push({
             row: idx + 2,
             target: m.target,
-            source: m.source,
             batchid: m.batchSource ? (mappedRow[m.batchSource] ?? '') : '',
             formula: genericResult.calc || 'No calculation',
             result: genericResult.value
@@ -1080,10 +1117,7 @@ document.getElementById('btnLoadCfg').onclick = () => {
   gotoStep(2);
 };
 
-if (!Object.keys(state.fxRates).length) {
-  state.fxRates = generateLast5YearsFxRates();
-}
-gotoStep(1);
+document.getElementById('btnProcess').onclick = () => runProcessing();
 </script>
 </body>
 </html>
