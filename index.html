@@ -28,6 +28,7 @@
     <span class="navbar-brand mb-0 h1"><i class="bi bi-file-earmark-spreadsheet"></i> Excel Mapping & Transformation Tool</span>
     <div class="d-flex gap-2">
       <button id="btnFxMenu" class="btn btn-outline-info btn-sm"><i class="bi bi-currency-exchange"></i> Exchange Menu</button>
+      <button id="btnCopyMappingJson" class="btn btn-outline-light btn-sm"><i class="bi bi-clipboard"></i> Copy Mapping JSON</button>
       <button id="btnSaveCfg" class="btn btn-outline-light btn-sm"><i class="bi bi-save"></i> Save Config</button>
       <button id="btnLoadCfg" class="btn btn-outline-light btn-sm"><i class="bi bi-folder2-open"></i> Load Config</button>
     </div>
@@ -315,7 +316,9 @@ function loadSheet(name) {
   state.sheetName = name;
   const ws = state.workbook.Sheets[name];
   const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+  // Assume headers in row 2 (index 1)
+  const headerRow = rawRows[1] || [];
+  const json = XLSX.utils.sheet_to_json(ws, { header: headerRow, defval: '' });
   if (!json.length) { setStatus('❌ Selected sheet is empty.', 'danger'); return; }
 
   // dedupe headers
@@ -338,8 +341,8 @@ function loadSheet(name) {
       state.sheetData[sheet] = { rows: [], sourceCols: [], rawRows: [] };
       return;
     }
-    // Use the first row as header for other sheets by default.
-    const headerRow = rawRowsLocal[0] || [];
+    // Use row 2 as header for other sheets
+    const headerRow = rawRowsLocal[1] || [];
     const data = XLSX.utils.sheet_to_json(sh, { header: headerRow, defval: '' });
     const sourceCols = headerRow;
     state.sheetData[sheet] = { rows: data, sourceCols, rawRows: rawRowsLocal };
@@ -399,26 +402,7 @@ function renderMapping() {
   }));
   // Ensure source and target are set if sourceMap/targetMap are set
   state.mappings.forEach(m => {
-    if (m.sourceMap && !m.source && m.source !== NEW_COLUMN_SOURCE) {
-      const sheetData = state.sheetData[m.sheet];
-      if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= m.rowIndex) {
-        const row = sheetData.rawRows[m.rowIndex - 1] || [];
-        const idx = row.findIndex(v => v == m.sourceMap);
-        if (idx >= 0 && sheetData.sourceCols[idx]) {
-          m.source = sheetData.sourceCols[idx];
-        }
-      }
-    }
-    if (m.targetMap && !m.target) {
-      const sheetData = state.sheetData[m.targetSheet];
-      if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= m.targetRowIndex) {
-        const row = sheetData.rawRows[m.targetRowIndex - 1] || [];
-        const idx = row.findIndex(v => v == m.targetMap);
-        if (idx >= 0 && sheetData.sourceCols[idx]) {
-          m.target = sheetData.sourceCols[idx];
-        }
-      }
-    }
+    // No longer needed since sourceMap/targetMap are column names
   });
   tbody.innerHTML = state.mappings.map((m, i) => `
     <tr class="map-row">
@@ -474,7 +458,7 @@ function renderMapping() {
             return uniqueValues.map(v => {
               const idx = row.indexOf(v);
               const col = sheetData.sourceCols[idx];
-              return `<option ${col === m.source ? 'selected' : ''}>${v}</option>`;
+              return `<option value="${col}" ${col === m.source ? 'selected' : ''}>${v}</option>`;
             }).join('');
           })()}
         </select>
@@ -552,28 +536,14 @@ function renderMapping() {
           const row = sheetData.rawRows[state.mappings[i].rowIndex - 1] || [];
           const idx = row.findIndex(v => v == el.value);
           if (idx >= 0 && sheetData.sourceCols[idx]) {
-            state.mappings[i].source = sheetData.sourceCols[idx];
-            state.mappings[i].targetMap = el.value;
-            if (!state.mappings[i].targetSheet) {
-              state.mappings[i].targetSheet = state.mappings[i].sheet;
-            }
-            if (!state.mappings[i].targetRowIndex) {
-              state.mappings[i].targetRowIndex = state.mappings[i].rowIndex;
-            }
+            state.mappings[i].sourceMap = sheetData.sourceCols[idx];
           }
         }
         renderMapping();
       }
       if (k === 'batchSource') {
-        // Map the selected row value to the actual batchSource column key
-        const sheetData = state.sheetData[state.mappings[i].sheet];
-        if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= state.mappings[i].rowIndex) {
-          const row = sheetData.rawRows[state.mappings[i].rowIndex - 1] || [];
-          const idx = row.findIndex(v => v == el.value);
-          if (idx >= 0 && sheetData.sourceCols[idx]) {
-            state.mappings[i].batchSource = sheetData.sourceCols[idx];
-          }
-        }
+        // Set the batch source column
+        state.mappings[i].batchSource = el.value;
         renderMapping();
       }
       if (k === 'targetSheet') {
@@ -593,7 +563,7 @@ function renderMapping() {
           const row = sheetData.rawRows[state.mappings[i].targetRowIndex - 1] || [];
           const idx = row.findIndex(v => v == el.value);
           if (idx >= 0 && sheetData.sourceCols[idx]) {
-            state.mappings[i].target = sheetData.sourceCols[idx];
+            state.mappings[i].targetMap = sheetData.sourceCols[idx];
           }
         }
         renderMapping();
@@ -601,15 +571,7 @@ function renderMapping() {
       if (k === 'source') {
         if (state.mappings[i].source !== NEW_COLUMN_SOURCE) {
           state.mappings[i].newValue = '';
-          // Map the selected row value to the actual source column key
-          const sheetData = state.sheetData[state.mappings[i].sheet];
-          if (sheetData && sheetData.rawRows && sheetData.rawRows.length >= state.mappings[i].rowIndex) {
-            const row = sheetData.rawRows[state.mappings[i].rowIndex - 1] || [];
-            const idx = row.findIndex(v => v == el.value);
-            if (idx >= 0 && sheetData.sourceCols[idx]) {
-              state.mappings[i].source = sheetData.sourceCols[idx];
-            }
-          }
+          state.mappings[i].source = el.value;
         }
         renderMapping();
       }
@@ -1102,6 +1064,16 @@ document.getElementById('btnDownload').onclick = () => {
 /* ============================================================
    Save / Load configuration (versioned, in localStorage)
 ============================================================ */
+document.getElementById('btnCopyMappingJson').onclick = async () => {
+  const payload = JSON.stringify(state.mappings, null, 2);
+  try {
+    await navigator.clipboard.writeText(payload);
+    alert('Mapping JSON copied to clipboard.');
+  } catch (err) {
+    const fallback = prompt('Clipboard unavailable. Copy the JSON manually:', payload);
+    if (fallback === null) return;
+  }
+};
 document.getElementById('btnSaveCfg').onclick = () => {
   const name = prompt('Configuration name:'); if (!name) return;
   const all = JSON.parse(localStorage.getItem('excelToolConfigs') || '{}');
