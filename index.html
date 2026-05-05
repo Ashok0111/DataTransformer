@@ -783,6 +783,7 @@ function runSourceDqCheck() {
     const outlierDeltaByRow = new Map();
     const outlierResultByRow = new Map();
     const prevRefRowsByGroup = new Map();
+    const nextRefRowsByGroup = new Map();
     groups.forEach((items, gKey) => {
       const sorted = items
         .map(r => ({ r, v: Number(String(r[targetCol] ?? '').trim()), rowNo: r.__row }))
@@ -799,6 +800,7 @@ function runSourceDqCheck() {
       }
       const outlierRows = new Set();
       const prevRefRows = new Set();
+      const nextRefRows = new Set();
       // Window-based trend validation:
       // Compare each diff with local median diff from neighboring window.
       const windowSize = 2;
@@ -822,11 +824,19 @@ function runSourceDqCheck() {
         outlierRows.add(currPoint.rowNo);
         prevRefRows.add(prevPoint.rowNo);
         const result = currPoint.v - prevPoint.v;
-        outlierDeltaByRow.set(currPoint.rowNo, `${currPoint.v} - ${prevPoint.v} = ${result}`);
+        let deltaText = `${currPoint.v} - ${prevPoint.v} = ${result}`;
+        const nextPoint = sorted[dIdx + 2];
+        if (nextPoint) {
+          nextRefRows.add(nextPoint.rowNo);
+          const nextDiff = nextPoint.v - currPoint.v;
+          deltaText += ` | ${nextPoint.v} - ${currPoint.v} = ${nextDiff}`;
+        }
+        outlierDeltaByRow.set(currPoint.rowNo, deltaText);
         outlierResultByRow.set(currPoint.rowNo, result);
       }
       outlierRowsByGroup.set(gKey, outlierRows);
       prevRefRowsByGroup.set(gKey, prevRefRows);
+      nextRefRowsByGroup.set(gKey, nextRefRows);
       statusByGroup.set(gKey, outlierRows.size ? 'Price Jumped' : 'Valid');
     });
 
@@ -834,13 +844,16 @@ function runSourceDqCheck() {
       const gKey = `${String(r[productCol] ?? '').trim()}||${String(r[packCol] ?? '').trim()}`;
       const outlierSet = outlierRowsByGroup.get(gKey) || new Set();
       const prevRefSet = prevRefRowsByGroup.get(gKey) || new Set();
+      const nextRefSet = nextRefRowsByGroup.get(gKey) || new Set();
       const isOutlier = outlierSet.has(r.__row);
       const isPrevRef = prevRefSet.has(r.__row);
+      const isNextRef = nextRefSet.has(r.__row);
       return {
         __row: r.__row,
         __dq_status: statusByGroup.get(gKey) || 'Valid',
         __dq_outlier: isOutlier ? 'OUTLIER' : '',
         __dq_prev_ref: isPrevRef ? 'PREV' : '',
+        __dq_next_ref: isNextRef ? 'NEXT' : '',
         __dq_outlier_delta: isOutlier ? (outlierDeltaByRow.get(r.__row) || '') : '',
         __dq_outlier_result: isOutlier ? (outlierResultByRow.get(r.__row) ?? '') : '',
         __dq_group_key: gKey,
@@ -904,7 +917,7 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
               <td>${r[productCol] ?? ''}</td>
               ${packCol !== productCol ? `<td>${r[packCol] ?? ''}</td>` : ''}
               ${targetCol !== productCol && targetCol !== packCol ? `<td class="${r.__dq_outlier ? 'dq-highlight' : ''} ${r.__dq_prev_ref ? 'dq-prev-outline' : ''}">${r[targetCol] ?? ''}</td>` : ''}
-              <td class="${r.__dq_outlier ? 'text-danger fw-bold' : (r.__dq_prev_ref ? 'text-primary fw-bold' : 'text-success')}">${r.__dq_outlier || r.__dq_prev_ref || 'OK'}</td>
+              <td class="${r.__dq_outlier ? 'text-danger fw-bold' : (r.__dq_prev_ref || r.__dq_next_ref ? 'text-primary fw-bold' : 'text-success')}">${r.__dq_outlier || r.__dq_prev_ref || r.__dq_next_ref || 'OK'}</td>
               <td class="${r.__dq_outlier ? 'text-danger fw-bold' : ''}">${r.__dq_outlier_delta || ''}</td>
               <td class="${r.__dq_outlier ? 'text-danger fw-bold' : ''}">${r.__dq_outlier_result ?? ''}</td>
               <td class="${r.__dq_status === 'Price Jumped' ? 'text-danger' : 'text-success'}">${r.__dq_status ?? ''}</td>
