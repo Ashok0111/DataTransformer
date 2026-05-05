@@ -6,20 +6,43 @@
 <title>Excel Mapping & Transformation Tool</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+<link href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mathjs@12.4.2/lib/browser/math.min.js"></script>
 <style>
   body { background:#f6f8fb; }
-  .step-pill { cursor:pointer; }
-  .step-pill.active { background:#0d6efd!important; color:#fff!important; }
-  .step-pill.done { background:#198754!important; color:#fff!important; }
+  .stepper { display:flex; align-items:center; gap:0; margin:0; padding:0; list-style:none; }
+  .stepper-item { display:flex; align-items:center; flex:1; min-width:0; }
+  .stepper-item:last-child { flex:0 0 auto; }
+  .step-dot {
+    width:30px; height:30px; border-radius:50%;
+    border:2px solid #adb5bd; color:#6c757d; background:#fff;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:600; font-size:.9rem; cursor:pointer;
+  }
+  .step-label { margin-left:8px; font-size:.9rem; color:#6c757d; white-space:nowrap; cursor:pointer; }
+  .step-line { flex:1; height:2px; background:#dee2e6; margin:0 10px; }
+  .stepper-item.active .step-dot { border-color:#0d6efd; background:#0d6efd; color:#fff; }
+  .stepper-item.active .step-label { color:#0d6efd; font-weight:600; }
+  .stepper-item.done .step-dot { border-color:#198754; background:#198754; color:#fff; }
+  .stepper-item.done .step-label { color:#198754; font-weight:600; }
+  .stepper-item.done .step-line { background:#198754; }
   .table-scroll { max-height: 420px; overflow:auto; }
   .map-row td { vertical-align: middle; }
   code.formula { background:#eef; padding:2px 6px; border-radius:4px; }
   .drop-zone { border:2px dashed #adb5bd; border-radius:12px; padding:48px; text-align:center; background:#fff; transition:.2s; }
   .drop-zone.dragover { border-color:#0d6efd; background:#e7f1ff; }
   .small-muted { font-size:.825rem; color:#6c757d; }
+  .dq-highlight { background: #fff3cd !important; box-shadow: inset 0 0 0 1px #ffec99; }
+  .source-dq-focus { background:#fff3cd !important; font-weight:600; }
+  .upload-tabs { display:flex; gap:8px; border-bottom:1px solid #dee2e6; margin-bottom:16px; }
+  .upload-tab-btn {
+    border:1px solid #dee2e6; border-bottom:none; background:#fff; color:#495057;
+    padding:8px 12px; border-top-left-radius:8px; border-top-right-radius:8px; cursor:pointer;
+    font-size:.9rem;
+  }
+  .upload-tab-btn.active { background:#0d6efd; color:#fff; border-color:#0d6efd; }
 </style>
 </head>
 <body>
@@ -34,12 +57,13 @@
 
 <div class="container-fluid py-3">
   <!-- Stepper -->
-  <ul class="nav nav-pills justify-content-center mb-4 gap-2" id="stepper">
-    <li class="nav-item"><span class="nav-link step-pill active" data-step="1">1. Upload</span></li>
-    <li class="nav-item"><span class="nav-link step-pill" data-step="2">2. Mapping</span></li>
-    <li class="nav-item"><span class="nav-link step-pill" data-step="3">3. Formulas</span></li>
-    <li class="nav-item"><span class="nav-link step-pill" data-step="4">4. Preview</span></li>
-    <li class="nav-item"><span class="nav-link step-pill" data-step="5">5. Download</span></li>
+  <ul class="stepper mb-4" id="stepper">
+    <li class="stepper-item active" data-step="1"><span class="step-dot">1</span><span class="step-label">Upload</span><span class="step-line"></span></li>
+    <li class="stepper-item" data-step="2"><span class="step-dot">2</span><span class="step-label">Mapping</span><span class="step-line"></span></li>
+    <li class="stepper-item" data-step="3"><span class="step-dot">3</span><span class="step-label">Formulas</span><span class="step-line"></span></li>
+    <li class="stepper-item" data-step="4"><span class="step-dot">4</span><span class="step-label">Preview</span><span class="step-line"></span></li>
+    <li class="stepper-item" data-step="5"><span class="step-dot">5</span><span class="step-label">Data Quality</span><span class="step-line"></span></li>
+    <li class="stepper-item" data-step="6"><span class="step-dot">6</span><span class="step-label">Download</span></li>
   </ul>
 
   <!-- STEP 1: Upload -->
@@ -47,19 +71,100 @@
     <div class="card shadow-sm">
       <div class="card-body">
         <h4 class="card-title mb-3">Upload Excel / CSV</h4>
-        <div id="dropZone" class="drop-zone">
-          <i class="bi bi-cloud-arrow-up display-3 text-primary"></i>
-          <p class="mt-2 mb-1"><strong>Drop file here</strong> or click to browse</p>
-          <p class="small-muted">Supported: .xlsx, .xls, .xlsm, .xlsb, .csv &mdash; Up to 50,000+ rows</p>
-          <input type="file" id="fileInput" accept=".xlsx,.xls,.xlsm,.xlsb,.csv" hidden />
-          <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()"><i class="bi bi-folder2-open"></i> Browse</button>
+        <div class="upload-tabs">
+          <button id="uploadTabFile" class="upload-tab-btn active" type="button">Upload File</button>
+          <button id="uploadTabDq" class="upload-tab-btn" type="button">Source DQ Check</button>
         </div>
-        <div id="uploadStatus" class="mt-3"></div>
-        <div id="sheetPicker" class="mt-3 d-none">
-          <label class="form-label fw-bold">Select sheet:</label>
-          <select id="sheetSelect" class="form-select" style="max-width:320px;"></select>
+
+        <div id="uploadTabPaneFile">
+          <div id="dropZone" class="drop-zone">
+            <i class="bi bi-cloud-arrow-up display-3 text-primary"></i>
+            <p class="mt-2 mb-1"><strong>Drop file here</strong> or click to browse</p>
+            <p class="small-muted">Supported: .xlsx, .xls, .xlsm, .xlsb, .csv &mdash; Up to 50,000+ rows</p>
+            <input type="file" id="fileInput" accept=".xlsx,.xls,.xlsm,.xlsb,.csv" hidden />
+            <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()"><i class="bi bi-folder2-open"></i> Browse</button>
+          </div>
+          <div id="uploadStatus" class="mt-3"></div>
+          <div id="sheetPicker" class="mt-3 d-none">
+            <label class="form-label fw-bold">Select sheet:</label>
+            <select id="sheetSelect" class="form-select" style="max-width:320px;"></select>
+          </div>
+          <div id="filePreview" class="mt-3"></div>
         </div>
-        <div id="filePreview" class="mt-3"></div>
+
+        <div id="uploadTabPaneDq" class="d-none">
+          <div class="border rounded p-3 bg-light">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h6 class="m-0">Source DQ Check</h6>
+              <div class="d-flex gap-2">
+                <button id="btnRunSourceDq" class="btn btn-sm btn-outline-primary">Run Source DQ</button>
+                <button id="btnExportOutlayerExcel" class="btn btn-sm btn-outline-success d-none">Export Outlayer Excel</button>
+              </div>
+            </div>
+            <div class="row g-2">
+              <div class="col-md-4">
+                <label class="form-label small mb-1">Function</label>
+                <select id="sourceDqFunction" class="form-select form-select-sm">
+                  <option value="blank_check">Blank Check</option>
+                  <option value="duplicate_check">Duplicate Check</option>
+                  <option value="outlayer_check">Outlayer Check</option>
+                </select>
+              </div>
+              <div class="col-md-4" id="sourceDqFilterColumnWrap">
+                <label class="form-label small mb-1">Filter Column</label>
+                <select id="sourceDqColumn" class="form-select form-select-sm">
+                  <option value="">Select column</option>
+                </select>
+              </div>
+              <div class="col-md-4" id="sourceDqFilterValueWrap">
+                <label class="form-label small mb-1">Filter Value</label>
+                <select id="sourceDqValue" class="form-select form-select-sm">
+                  <option value="__ALL__">All values</option>
+                </select>
+              </div>
+              <div class="col-md-4" id="sourceDqTargetWrap">
+                <label class="form-label small mb-1">Target Column (for Price/Data Jump)</label>
+                <select id="sourceDqTargetColumn" class="form-select form-select-sm">
+                  <option value="">Select target column</option>
+                </select>
+              </div>
+              <div class="col-md-4 d-none" id="sourceDqProductWrap">
+                <label class="form-label small mb-1">Product Column (Outlayer)</label>
+                <select id="sourceDqProductColumn" class="form-select form-select-sm">
+                  <option value="">Select product column</option>
+                </select>
+              </div>
+              <div class="col-md-4 d-none" id="sourceDqPackWrap">
+                <label class="form-label small mb-1">Pack Size Column (Outlayer)</label>
+                <select id="sourceDqPackColumn" class="form-select form-select-sm">
+                  <option value="">Select pack size column</option>
+                </select>
+              </div>
+              <div class="col-md-4" id="sourceDqJumpOpWrap">
+                <label class="form-label small mb-1">Jump Condition</label>
+                <select id="sourceDqJumpOp" class="form-select form-select-sm">
+                  <option value="any">Any</option>
+                  <option value="gt">&gt;</option>
+                  <option value="gte">&gt;=</option>
+                  <option value="lt">&lt;</option>
+                  <option value="lte">&lt;=</option>
+                  <option value="eq">=</option>
+                  <option value="neq">!=</option>
+                  <option value="between">Between</option>
+                </select>
+              </div>
+              <div class="col-md-4" id="sourceDqJumpValue1Wrap">
+                <label class="form-label small mb-1">Jump Value</label>
+                <input id="sourceDqJumpValue1" type="number" class="form-control form-control-sm" placeholder="e.g. 3000" />
+              </div>
+              <div class="col-md-4" id="sourceDqJumpValue2Wrap">
+                <label class="form-label small mb-1">Jump Value 2 (Between)</label>
+                <input id="sourceDqJumpValue2" type="number" class="form-control form-control-sm" placeholder="e.g. 5000" />
+              </div>
+            </div>
+            <div id="sourceDqResult" class="mt-3"></div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -182,8 +287,22 @@
     </div>
   </section>
 
-  <!-- STEP 5: Download -->
+  <!-- STEP 5: Data Quality Check -->
   <section data-pane="5" class="d-none">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h4 class="card-title m-0">Data Quality Check</h4>
+          <button id="btnRunDQ" class="btn btn-outline-primary"><i class="bi bi-list-check"></i> Run Quality Checks</button>
+        </div>
+        <div id="dqSummary" class="mb-3"></div>
+        <div id="dqIssues" class="table-responsive table-scroll"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 6: Download -->
+  <section data-pane="6" class="d-none">
     <div class="card shadow-sm">
       <div class="card-body text-center">
         <h4 class="card-title mb-3">Download Master Excel</h4>
@@ -221,6 +340,8 @@ const state = {
   fx: { year:null, quarter:'', month:'', resolved:null, columns:'' },
   fxRates: {},            // { "year_quarter_month": rate }
   processed: null,       // { rows, errors, columns }
+  preview: { highlightMode: '', duplicateColumn: '' },
+  sourceDq: { lastFn: '', outlayerFlatRows: [], outlayerCols: [] }
 };
 
 function getSheetDataByName(name) {
@@ -267,11 +388,13 @@ function getRowsForSheetRow(sheetName, rowIndex) {
   if (!headerRow.length) return [];
   const headers = dedupeHeaders(headerRow);
   const dataRows = rawRows.slice(headerIdx + 1);
-  return dataRows.map(r => {
+  const mapped = dataRows.map(r => {
     const out = {};
     headers.forEach((h, i) => { out[h] = r?.[i] ?? ''; });
     return out;
   });
+  // Drop fully empty trailing/body rows to prevent invalid blank rows in preview/output.
+  return mapped.filter(r => Object.values(r).some(v => String(v ?? '').trim() !== ''));
 }
 
 function normalizeJoinKey(value) {
@@ -294,18 +417,30 @@ function gotoStep(n) {
   state.step = n;
   document.querySelectorAll('[data-pane]').forEach(el => el.classList.add('d-none'));
   document.querySelector(`[data-pane="${n}"]`).classList.remove('d-none');
-  document.querySelectorAll('.step-pill').forEach(p => {
+  document.querySelectorAll('.stepper-item').forEach(p => {
     const s = +p.dataset.step;
     p.classList.toggle('active', s === n);
     p.classList.toggle('done', s < n);
   });
   document.getElementById('btnPrev').disabled = n === 1;
-  document.getElementById('btnNext').classList.toggle('d-none', n === 5);
+  document.getElementById('btnNext').classList.toggle('d-none', n === 6);
   if (n === 2) renderMapping();
   if (n === 3) renderFormulas();
   if (n === 4) renderPreviewArea();
+  if (n === 5) renderDataQuality();
 }
-document.querySelectorAll('.step-pill').forEach(p => p.onclick = () => gotoStep(+p.dataset.step));
+function switchUploadTab(tabName) {
+  const isFile = tabName === 'file';
+  document.getElementById('uploadTabFile').classList.toggle('active', isFile);
+  document.getElementById('uploadTabDq').classList.toggle('active', !isFile);
+  document.getElementById('uploadTabPaneFile').classList.toggle('d-none', !isFile);
+  document.getElementById('uploadTabPaneDq').classList.toggle('d-none', isFile);
+}
+document.querySelectorAll('.stepper-item').forEach(p => {
+  p.onclick = () => gotoStep(+p.dataset.step);
+});
+document.getElementById('uploadTabFile').onclick = () => switchUploadTab('file');
+document.getElementById('uploadTabDq').onclick = () => switchUploadTab('dq');
 document.getElementById('btnPrev').onclick = () => gotoStep(Math.max(1, state.step - 1));
 document.getElementById('btnNext').onclick = () => {
   if (state.step === 1 && !state.rows.length) { alert('Please upload a file first.'); return; }
@@ -321,12 +456,12 @@ document.getElementById('btnNext').onclick = () => {
     if (dupes.length) { document.getElementById('mapWarning').textContent = 'Duplicate target mapping: ' + [...new Set(dupes)].join(', '); return; }
     document.getElementById('mapWarning').textContent = '';
   }
-  gotoStep(Math.min(5, state.step + 1));
+  gotoStep(Math.min(6, state.step + 1));
 };
 document.getElementById('btnFxMenu').onclick = () => {
   document.querySelectorAll('[data-pane]').forEach(el => el.classList.add('d-none'));
   document.querySelector('[data-pane="fx"]').classList.remove('d-none');
-  document.querySelectorAll('.step-pill').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.stepper-item').forEach(p => p.classList.remove('active'));
   document.getElementById('btnPrev').disabled = true;
   document.getElementById('btnNext').classList.add('d-none');
   renderFx();
@@ -449,6 +584,247 @@ function renderFilePreview() {
       </table>
     </div>`;
   document.getElementById('filePreview').innerHTML = html;
+  initSourceDqControls();
+}
+
+function initSourceDqControls() {
+  const colSel = document.getElementById('sourceDqColumn');
+  const valSel = document.getElementById('sourceDqValue');
+  const targetSel = document.getElementById('sourceDqTargetColumn');
+  const productSel = document.getElementById('sourceDqProductColumn');
+  const packSel = document.getElementById('sourceDqPackColumn');
+  if (!colSel || !valSel || !targetSel || !productSel || !packSel) return;
+  colSel.innerHTML = '<option value="">Select column</option>' + state.sourceCols.map(c => `<option value="${c}">${c}</option>`).join('');
+  targetSel.innerHTML = '<option value="">Select target column</option>' + state.sourceCols.map(c => `<option value="${c}">${c}</option>`).join('');
+  productSel.innerHTML = '<option value="">Select product column</option>' + state.sourceCols.map(c => `<option value="${c}">${c}</option>`).join('');
+  packSel.innerHTML = '<option value="">Select pack size column</option>' + state.sourceCols.map(c => `<option value="${c}">${c}</option>`).join('');
+  valSel.innerHTML = '<option value="__ALL__">All values</option>';
+  colSel.onchange = () => {
+    const col = colSel.value;
+    if (!col) {
+      valSel.innerHTML = '<option value="__ALL__">All values</option>';
+      return;
+    }
+    const values = [...new Set(state.rows.map(r => String(r[col] ?? '').trim()).filter(v => v !== ''))].slice(0, 2000);
+    valSel.innerHTML = '<option value="__ALL__">All values</option>' + values.map(v => `<option value="${v}">${v}</option>`).join('');
+  };
+  const fnSel = document.getElementById('sourceDqFunction');
+  if (fnSel) {
+    fnSel.onchange = () => updateSourceDqFunctionUI();
+  }
+  updateSourceDqFunctionUI();
+}
+
+function updateSourceDqFunctionUI() {
+  const fn = document.getElementById('sourceDqFunction')?.value || 'blank_check';
+  const isOutlayer = fn === 'outlayer_check';
+  const show = (id, yes) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('d-none', !yes);
+  };
+  show('sourceDqFilterColumnWrap', !isOutlayer);
+  show('sourceDqFilterValueWrap', !isOutlayer);
+  show('sourceDqTargetWrap', isOutlayer);
+  show('sourceDqJumpOpWrap', false);
+  show('sourceDqJumpValue1Wrap', false);
+  show('sourceDqJumpValue2Wrap', false);
+  show('sourceDqProductWrap', isOutlayer);
+  show('sourceDqPackWrap', isOutlayer);
+}
+
+function runSourceDqCheck() {
+  const col = document.getElementById('sourceDqColumn').value;
+  const targetCol = document.getElementById('sourceDqTargetColumn').value;
+  const productCol = document.getElementById('sourceDqProductColumn').value;
+  const packCol = document.getElementById('sourceDqPackColumn').value;
+  const valueFilter = document.getElementById('sourceDqValue').value;
+  const fn = document.getElementById('sourceDqFunction').value;
+  const resultWrap = document.getElementById('sourceDqResult');
+  const exportBtn = document.getElementById('btnExportOutlayerExcel');
+  state.sourceDq.lastFn = fn;
+  state.sourceDq.outlayerFlatRows = [];
+  state.sourceDq.outlayerCols = [];
+  if (exportBtn) exportBtn.classList.add('d-none');
+  if (!col && fn !== 'outlayer_check') {
+    resultWrap.innerHTML = '<div class="alert alert-warning py-2 mb-0">Please select a column.</div>';
+    return;
+  }
+  const filtered = state.rows.filter(r => {
+    if (valueFilter === '__ALL__') return true;
+    if (!col) return true; // Optional filter for outlayer check when column is not selected.
+    return state.sourceCols.some(c => String(r[c] ?? '').trim() === valueFilter);
+  });
+  if (!filtered.length) {
+    resultWrap.innerHTML = '<div class="alert alert-info py-2 mb-0">No rows found for selected filter.</div>';
+    return;
+  }
+
+  if (fn === 'blank_check') {
+    const blanks = filtered
+      .map((r, idx) => ({ __row: idx + 2, ...r }))
+      .filter(x => String(x[col] ?? '').trim() === '');
+    if (!blanks.length) {
+      resultWrap.innerHTML = '<div class="alert alert-success py-2 mb-0">Blank values in selected scope: <strong>0</strong></div>';
+      return;
+    }
+    renderSourceDqResultTable(blanks, ['__row', ...state.sourceCols], 'Blank values in selected scope');
+    return;
+  }
+
+  if (fn === 'duplicate_check') {
+    const map = new Map();
+    filtered.forEach(r => {
+      const v = String(r[col] ?? '').trim();
+      if (!v) return;
+      map.set(v, (map.get(v) || 0) + 1);
+    });
+    const dups = [...map.entries()].filter(([,count]) => count > 1).sort((a,b)=>b[1]-a[1]);
+    if (!dups.length) {
+      resultWrap.innerHTML = '<div class="alert alert-success py-2 mb-0">No duplicate values found.</div>';
+      return;
+    }
+    const dupVals = new Set(dups.map(([v]) => v));
+    const dupRows = filtered
+      .map((r, idx) => ({ __row: idx + 2, ...r }))
+      .filter(r => dupVals.has(String(r[col] ?? '').trim()));
+    renderSourceDqResultTable(dupRows, ['__row', ...state.sourceCols], 'Duplicate values found');
+  }
+
+  if (fn === 'outlayer_check') {
+    if (!productCol || !packCol || !targetCol) {
+      resultWrap.innerHTML = '<div class="alert alert-warning py-2 mb-0">Please select Product Column, Pack Size Column, and Target Column for Outlayer Check.</div>';
+      return;
+    }
+    const enrichedRows = filtered.map((r, idx) => ({ __row: idx + 2, ...r }));
+    const groups = new Map();
+    enrichedRows.forEach(r => {
+      const gKey = `${String(r[productCol] ?? '').trim()}||${String(r[packCol] ?? '').trim()}`;
+      if (!groups.has(gKey)) groups.set(gKey, []);
+      groups.get(gKey).push(r);
+    });
+
+    const statusByGroup = new Map();
+    groups.forEach((items, gKey) => {
+      const sorted = items
+        .map(r => ({ r, v: Number(String(r[targetCol] ?? '').trim()) }))
+        .filter(x => !Number.isNaN(x.v))
+        .sort((a, b) => a.v - b.v);
+      if (sorted.length < 3) {
+        statusByGroup.set(gKey, 'Valid');
+        return;
+      }
+      const diffs = [];
+      for (let i = 1; i < sorted.length; i++) {
+        diffs.push(sorted[i].v - sorted[i - 1].v);
+      }
+      const freq = new Map();
+      diffs.forEach(d => freq.set(d, (freq.get(d) || 0) + 1));
+      const expectedStep = [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      const hasJump = diffs.some(d => d !== expectedStep);
+      statusByGroup.set(gKey, hasJump ? 'Price Jumped' : 'Valid');
+    });
+
+    const outRows = enrichedRows.map(r => {
+      const gKey = `${String(r[productCol] ?? '').trim()}||${String(r[packCol] ?? '').trim()}`;
+      return {
+        __row: r.__row,
+        __dq_status: statusByGroup.get(gKey) || 'Valid',
+        __dq_group_key: gKey,
+        ...r
+      };
+    });
+    state.sourceDq.outlayerFlatRows = outRows.map(r => ({
+      Row: r.__row ?? '',
+      Status: r.__dq_status ?? '',
+      ...state.sourceCols.reduce((acc, c) => { acc[c] = r[c] ?? ''; return acc; }, {})
+    }));
+    state.sourceDq.outlayerCols = ['Row', 'Status', ...state.sourceCols];
+    if (exportBtn) exportBtn.classList.remove('d-none');
+    renderOutlayerGroupedResult(outRows, productCol, packCol, targetCol);
+    return;
+  }
+}
+
+function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
+  const resultWrap = document.getElementById('sourceDqResult');
+  const grouped = new Map();
+  rows.forEach(r => {
+    const key = r.__dq_group_key || `${String(r[productCol] ?? '').trim()}||${String(r[packCol] ?? '').trim()}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(r);
+  });
+  const sections = [];
+  grouped.forEach((items, key) => {
+    const status = items[0]?.__dq_status || 'Valid';
+    const p = String(items[0]?.[productCol] ?? '');
+    const pack = String(items[0]?.[packCol] ?? '');
+    sections.push(`
+      <div class="mb-3 border rounded p-2 bg-white">
+        <div class="d-flex justify-content-between align-items-center px-1 py-1">
+          <div><strong>${productCol}:</strong> ${p} &nbsp;|&nbsp; <strong>${packCol}:</strong> ${pack}</div>
+          <div class="${status === 'Price Jumped' ? 'text-danger' : 'text-success'}"><strong>${status}</strong></div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0">
+            <thead><tr><th>Row</th><th>${productCol}</th><th>${packCol}</th><th>${targetCol}</th><th>Status</th></tr></thead>
+            <tbody>${items.map(r => `<tr>
+              <td>${r.__row ?? ''}</td>
+              <td>${r[productCol] ?? ''}</td>
+              <td>${r[packCol] ?? ''}</td>
+              <td>${r[targetCol] ?? ''}</td>
+              <td class="${r.__dq_status === 'Price Jumped' ? 'text-danger' : 'text-success'}">${r.__dq_status ?? ''}</td>
+            </tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </div>`);
+  });
+  resultWrap.innerHTML = `
+    <div class="alert alert-info py-2 mb-2">Outlayer groups: <strong>${grouped.size}</strong></div>
+    ${sections.join('')}
+  `;
+}
+
+function renderSourceDqResultTable(rows, columns, title) {
+  const resultWrap = document.getElementById('sourceDqResult');
+  const labelMap = {
+    __row: 'Row',
+    __dq_prev: 'Previous',
+    __dq_curr: 'Current',
+    __dq_jump: 'Jump',
+    __dq_filter: 'Filter Column Value',
+    __dq_status: 'Status'
+  };
+  resultWrap.innerHTML = `
+    <div class="alert alert-warning py-2 mb-2">${title}: <strong>${rows.length}</strong></div>
+    <div class="table-responsive">
+      <table id="sourceDqResultTable" class="table table-sm table-striped table-bordered w-100">
+        <thead><tr>${columns.map(c => {
+          const focus = ['__dq_prev','__dq_curr','__dq_jump','__dq_filter'].includes(c) ? 'source-dq-focus' : '';
+          return `<th class="${focus}">${labelMap[c] || c}</th>`;
+        }).join('')}</tr></thead>
+        <tbody>${rows.map(r => `<tr>${columns.map(c => {
+          const focus = ['__dq_prev','__dq_curr','__dq_jump','__dq_filter'].includes(c) ? 'source-dq-focus' : '';
+          return `<td class="${focus}">${r[c] ?? ''}</td>`;
+        }).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  initSourceDqDataTable();
+}
+
+function initSourceDqDataTable() {
+  if (!window.jQuery || !window.jQuery.fn || !window.jQuery.fn.DataTable) return;
+  const $table = window.jQuery('#sourceDqResultTable');
+  if (!$table.length) return;
+  if (window.jQuery.fn.DataTable.isDataTable('#sourceDqResultTable')) {
+    $table.DataTable().destroy();
+  }
+  $table.DataTable({
+    pageLength: 25,
+    lengthMenu: [10, 25, 50, 100],
+    order: [],
+    autoWidth: false
+  });
 }
 
 /* ============================================================
@@ -1225,14 +1601,39 @@ function renderPreviewArea() {
   const { rows, columns, errors, calculations, ms } = state.processed;
   stats.innerHTML = `<div class="alert alert-success py-2 mb-0">
     ✅ Processed <strong>${rows.length.toLocaleString()}</strong> rows in <strong>${ms} ms</strong>.
-    Errors: <strong>${errors.length}</strong>.</div>`;
-  const sample = rows.slice(0, 50);
+    Errors: <a href="#" id="dqErrLink"><strong>${errors.length}</strong></a>.
+    ${state.preview.highlightMode ? `<a href="#" id="dqClearLink" class="ms-2">Clear Highlight</a>` : ''}
+  </div>`;
+  const errCellSet = new Set(errors.map(e => `${e.row}::${e.column}`));
+  const duplicateValueMaps = {};
+  if (state.preview.highlightMode === 'duplicates') {
+    const colsToCheck = state.preview.duplicateColumn ? [state.preview.duplicateColumn] : columns;
+    colsToCheck.forEach(c => {
+      const counts = new Map();
+      rows.forEach(r => {
+        const v = String(r[c] ?? '').trim();
+        if (!v) return;
+        counts.set(v, (counts.get(v) || 0) + 1);
+      });
+      duplicateValueMaps[c] = counts;
+    });
+  }
   wrap.innerHTML = `
-    <table class="table table-sm table-striped">
-      <thead><tr>${columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
-      <tbody>${sample.map(r=>`<tr>${columns.map(c=>`<td>${r[c]??''}</td>`).join('')}</tr>`).join('')}</tbody>
+    <table id="previewResultTable" class="table table-sm table-striped table-bordered w-100">
+      <thead><tr><th>#</th>${columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map((r, rowIdx)=>`<tr>${
+        `<td>${rowIdx + 2}</td>` + columns.map(c=>{
+          const cellValue = String(r[c] ?? '').trim();
+          const isErr = state.preview.highlightMode === 'errors' && errCellSet.has(`${rowIdx + 2}::${c}`);
+          const isBlank = state.preview.highlightMode === 'blanks' && cellValue === '';
+          const isDupMode = state.preview.highlightMode === 'duplicates' && (!state.preview.duplicateColumn || state.preview.duplicateColumn === c);
+          const isDup = isDupMode && cellValue !== '' && ((duplicateValueMaps[c]?.get(cellValue) || 0) > 1);
+          return `<td class="${(isErr || isBlank || isDup) ? 'dq-highlight' : ''}">${r[c]??''}</td>`;
+        }).join('')
+      }</tr>`).join('')}</tbody>
     </table>
-    <div class="small-muted">Showing first ${sample.length} of ${rows.length} rows.</div>`;
+    <div class="small-muted">Total rows: ${rows.length}</div>`;
+  initPreviewDataTable();
   const calcHtml = calculations && calculations.length ? `
     <h6 class="mt-3">Exchange Calculation Preview</h6>
     <table class="table table-sm table-bordered">
@@ -1246,6 +1647,160 @@ function renderPreviewArea() {
       <tbody>${errors.slice(0,100).map(e=>`<tr><td>${e.row}</td><td>${e.column}</td><td>${e.message}</td></tr>`).join('')}</tbody>
     </table>` : '';
   errWrap.innerHTML = calcHtml + errHtml;
+  const errLink = document.getElementById('dqErrLink');
+  if (errLink) {
+    errLink.onclick = (ev) => {
+      ev.preventDefault();
+      state.preview.highlightMode = 'errors';
+      renderPreviewArea();
+    };
+  }
+  const clearLink = document.getElementById('dqClearLink');
+  if (clearLink) {
+    clearLink.onclick = (ev) => {
+      ev.preventDefault();
+      state.preview.highlightMode = '';
+      renderPreviewArea();
+    };
+  }
+}
+
+function initPreviewDataTable() {
+  if (!window.jQuery || !window.jQuery.fn || !window.jQuery.fn.DataTable) return;
+  const $table = window.jQuery('#previewResultTable');
+  if (!$table.length) return;
+  if (window.jQuery.fn.DataTable.isDataTable('#previewResultTable')) {
+    $table.DataTable().destroy();
+  }
+  $table.DataTable({
+    pageLength: 25,
+    lengthMenu: [10, 25, 50, 100],
+    order: [],
+    autoWidth: false
+  });
+}
+
+function runDataQualityCheck() {
+  if (!state.processed) return null;
+  const { rows, columns, errors } = state.processed;
+  const mandatoryTargets = state.mappings.filter(m => m.mandatory && m.target).map(m => m.target);
+  const blankCounts = {};
+  mandatoryTargets.forEach(t => { blankCounts[t] = 0; });
+  let blankCells = 0;
+  const duplicateInfo = {};
+  const valueMaps = {};
+  columns.forEach(c => { valueMaps[c] = new Map(); });
+  rows.forEach(row => {
+    columns.forEach(c => {
+      const val = row[c];
+      const str = val == null ? '' : String(val).trim();
+      if (str === '') blankCells += 1;
+      if (mandatoryTargets.includes(c) && str === '') blankCounts[c] += 1;
+      if (str !== '') {
+        const count = valueMaps[c].get(str) || 0;
+        valueMaps[c].set(str, count + 1);
+      }
+    });
+  });
+  const duplicateDetails = columns.map(c => {
+    const dupCount = Array.from(valueMaps[c].values()).filter(v => v > 1).reduce((sum, v) => sum + v, 0);
+    return { column: c, duplicates: dupCount };
+  });
+  const duplicates = duplicateDetails.filter(item => item.duplicates > 0);
+  return {
+    rows: rows.length,
+    columns: columns.length,
+    errors: errors.length,
+    blankCells,
+    blankMandatory: Object.entries(blankCounts).filter(([,v]) => v > 0).map(([column, count]) => ({ column, count })),
+    duplicates,
+    duplicateDetails,
+    status: (errors.length || blankCells || duplicates.length) ? 'Attention needed' : 'Passed',
+  };
+}
+
+function renderDataQuality() {
+  const wrap = document.getElementById('dqSummary');
+  const issues = document.getElementById('dqIssues');
+  if (!state.processed) {
+    wrap.innerHTML = '<div class="alert alert-info py-2 mb-0">Run processing first, then perform data quality checks.</div>';
+    issues.innerHTML = '';
+    return;
+  }
+  const result = runDataQualityCheck();
+  if (!result) {
+    wrap.innerHTML = '<div class="alert alert-warning py-2 mb-0">Data quality check could not run.</div>';
+    issues.innerHTML = '';
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="alert alert-${result.status === 'Passed' ? 'success' : 'warning'} py-2 mb-3">
+      <strong>DQ Status:</strong> ${result.status}. Processed rows: ${result.rows.toLocaleString()}, errors: ${result.errors}, blank cells: ${result.blankCells}.
+    </div>
+    <div class="row gx-2 gy-2">
+      <div class="col-md-4"><div class="border rounded p-3 bg-light"><strong>Processed rows</strong><div>${result.rows.toLocaleString()}</div></div></div>
+      <div class="col-md-4"><div class="border rounded p-3 bg-light"><strong>Blank values</strong><div><a href="#" id="dqBlankLink">${result.blankCells.toLocaleString()}</a></div></div></div>
+      <div class="col-md-4"><div class="border rounded p-3 bg-light"><strong>Errors</strong><div>${result.errors.toLocaleString()}</div></div></div>
+    </div>`;
+  const blocks = [];
+  if (result.blankMandatory.length) {
+    blocks.push(`
+      <div class="mb-3">
+        <h6>Mandatory fields with blanks</h6>
+        <table class="table table-sm table-bordered">
+          <thead><tr><th>Target Column</th><th>Blank count</th></tr></thead>
+          <tbody>${result.blankMandatory.map(item => `<tr><td>${item.column}</td><td>${item.count.toLocaleString()}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>`);
+  }
+  blocks.push(`
+    <div class="mb-3">
+      <h6>Duplicate values detected</h6>
+      <table class="table table-sm table-bordered">
+        <thead><tr><th>Column</th><th>Duplicate count</th><th>Status</th></tr></thead>
+        <tbody>${result.duplicateDetails.map(item => `
+          <tr>
+            <td>${item.column}</td>
+            <td>${item.duplicates > 0 ? `<a href="#" class="dq-dup-link" data-col="${item.column}">${item.duplicates.toLocaleString()}</a>` : '0'}</td>
+            <td>${item.duplicates > 0 ? '<span class="text-warning">Issue</span>' : '<span class="text-success">✓ No errors</span>'}</td>
+          </tr>`).join('')}</tbody>
+      </table>
+      <a href="#" id="dqDupAllLink">Highlight duplicates across all columns in preview</a>
+    </div>`);
+  if (!blocks.length) {
+    issues.innerHTML = '<div class="alert alert-success py-2 mb-0">No data quality issues found.</div>';
+  } else {
+    issues.innerHTML = blocks.join('');
+  }
+  const blankLink = document.getElementById('dqBlankLink');
+  if (blankLink) {
+    blankLink.onclick = (ev) => {
+      ev.preventDefault();
+      state.preview.highlightMode = 'blanks';
+      state.preview.duplicateColumn = '';
+      gotoStep(4);
+      renderPreviewArea();
+    };
+  }
+  const dupAllLink = document.getElementById('dqDupAllLink');
+  if (dupAllLink) {
+    dupAllLink.onclick = (ev) => {
+      ev.preventDefault();
+      state.preview.highlightMode = 'duplicates';
+      state.preview.duplicateColumn = '';
+      gotoStep(4);
+      renderPreviewArea();
+    };
+  }
+  issues.querySelectorAll('.dq-dup-link').forEach(el => {
+    el.onclick = (ev) => {
+      ev.preventDefault();
+      state.preview.highlightMode = 'duplicates';
+      state.preview.duplicateColumn = el.dataset.col || '';
+      gotoStep(4);
+      renderPreviewArea();
+    };
+  });
 }
 
 /* ============================================================
@@ -1354,7 +1909,21 @@ if (btnLoadCfg) {
   };
 }
 
+document.getElementById('btnRunDQ').onclick = renderDataQuality;
 document.getElementById('btnProcess').onclick = () => runProcessing();
+document.getElementById('btnRunSourceDq').onclick = () => runSourceDqCheck();
+document.getElementById('btnExportOutlayerExcel').onclick = () => {
+  const rows = state.sourceDq.outlayerFlatRows || [];
+  if (!rows.length) { alert('Run Outlayer Check first.'); return; }
+  const cols = state.sourceDq.outlayerCols || Object.keys(rows[0] || {});
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
+  XLSX.utils.book_append_sheet(wb, ws, 'Outlayer Report');
+  XLSX.writeFile(wb, 'outlayer_report.xlsx');
+};
 </script>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
 </body>
 </html>
