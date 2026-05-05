@@ -1841,9 +1841,10 @@ function renderPreviewArea() {
           const cellValue = String(r[c] ?? '').trim();
           const isErr = state.preview.highlightMode === 'errors' && errCellSet.has(`${rowIdx + 2}::${c}`);
           const isBlank = state.preview.highlightMode === 'blanks' && cellValue === '';
+          const isNull = state.preview.highlightMode === 'nulls' && r[c] == null;
           const isDupMode = state.preview.highlightMode === 'duplicates' && (!state.preview.duplicateColumn || state.preview.duplicateColumn === c);
           const isDup = isDupMode && cellValue !== '' && ((duplicateValueMaps[c]?.get(cellValue) || 0) > 1);
-          return `<td class="${(isErr || isBlank || isDup) ? 'dq-highlight' : ''}">${r[c]??''}</td>`;
+          return `<td class="${(isErr || isBlank || isNull || isDup) ? 'dq-highlight' : ''}">${r[c]??''}</td>`;
         }).join('')
       }</tr>`).join('')}</tbody>
     </table>
@@ -1902,6 +1903,9 @@ function runDataQualityCheck() {
   const blankCounts = {};
   mandatoryTargets.forEach(t => { blankCounts[t] = 0; });
   let blankCells = 0;
+  const nullCounts = {};
+  columns.forEach(c => { nullCounts[c] = 0; });
+  let nullCells = 0;
   const duplicateInfo = {};
   const valueMaps = {};
   columns.forEach(c => { valueMaps[c] = new Map(); });
@@ -1910,6 +1914,7 @@ function runDataQualityCheck() {
       const val = row[c];
       const str = val == null ? '' : String(val).trim();
       if (str === '') blankCells += 1;
+      if (val == null) { nullCells += 1; nullCounts[c] += 1; }
       if (mandatoryTargets.includes(c) && str === '') blankCounts[c] += 1;
       if (str !== '') {
         const count = valueMaps[c].get(str) || 0;
@@ -1927,10 +1932,12 @@ function runDataQualityCheck() {
     columns: columns.length,
     errors: errors.length,
     blankCells,
+    nullCells,
     blankMandatory: Object.entries(blankCounts).filter(([,v]) => v > 0).map(([column, count]) => ({ column, count })),
+    nullByColumn: Object.entries(nullCounts).filter(([,v]) => v > 0).map(([column, count]) => ({ column, count })),
     duplicates,
     duplicateDetails,
-    status: (errors.length || blankCells || duplicates.length) ? 'Attention needed' : 'Passed',
+    status: (errors.length || blankCells || nullCells || duplicates.length) ? 'Attention needed' : 'Passed',
   };
 }
 
@@ -1950,12 +1957,13 @@ function renderDataQuality() {
   }
   wrap.innerHTML = `
     <div class="alert alert-${result.status === 'Passed' ? 'success' : 'warning'} py-2 mb-3">
-      <strong>DQ Status:</strong> ${result.status}. Processed rows: ${result.rows.toLocaleString()}, errors: ${result.errors}, blank cells: ${result.blankCells}.
+      <strong>DQ Status:</strong> ${result.status}. Processed rows: ${result.rows.toLocaleString()}, errors: ${result.errors}, blank cells: ${result.blankCells}, null cells: ${result.nullCells}.
     </div>
     <div class="row gx-2 gy-2">
-      <div class="col-md-4"><div class="border rounded p-3 bg-light"><strong>Processed rows</strong><div>${result.rows.toLocaleString()}</div></div></div>
-      <div class="col-md-4"><div class="border rounded p-3 bg-light"><strong>Blank values</strong><div><a href="#" id="dqBlankLink">${result.blankCells.toLocaleString()}</a></div></div></div>
-      <div class="col-md-4"><div class="border rounded p-3 bg-light"><strong>Errors</strong><div>${result.errors.toLocaleString()}</div></div></div>
+      <div class="col-md-3"><div class="border rounded p-3 bg-light"><strong>Processed rows</strong><div>${result.rows.toLocaleString()}</div></div></div>
+      <div class="col-md-3"><div class="border rounded p-3 bg-light"><strong>Blank values</strong><div><a href="#" id="dqBlankLink">${result.blankCells.toLocaleString()}</a></div></div></div>
+      <div class="col-md-3"><div class="border rounded p-3 bg-light"><strong>Null values</strong><div><a href="#" id="dqNullLink">${result.nullCells.toLocaleString()}</a></div></div></div>
+      <div class="col-md-3"><div class="border rounded p-3 bg-light"><strong>Errors</strong><div>${result.errors.toLocaleString()}</div></div></div>
     </div>`;
   const blocks = [];
   if (result.blankMandatory.length) {
@@ -1968,20 +1976,16 @@ function renderDataQuality() {
         </table>
       </div>`);
   }
-  blocks.push(`
-    <div class="mb-3">
-      <h6>Duplicate values detected</h6>
-      <table class="table table-sm table-bordered">
-        <thead><tr><th>Column</th><th>Duplicate count</th><th>Status</th></tr></thead>
-        <tbody>${result.duplicateDetails.map(item => `
-          <tr>
-            <td>${item.column}</td>
-            <td>${item.duplicates > 0 ? `<a href="#" class="dq-dup-link" data-col="${item.column}">${item.duplicates.toLocaleString()}</a>` : '0'}</td>
-            <td>${item.duplicates > 0 ? '<span class="text-warning">Issue</span>' : '<span class="text-success">✓ No errors</span>'}</td>
-          </tr>`).join('')}</tbody>
-      </table>
-      <a href="#" id="dqDupAllLink">Highlight duplicates across all columns in preview</a>
-    </div>`);
+  if (result.nullByColumn.length) {
+    blocks.push(`
+      <div class="mb-3">
+        <h6>Columns with null values</h6>
+        <table class="table table-sm table-bordered">
+          <thead><tr><th>Target Column</th><th>Null count</th></tr></thead>
+          <tbody>${result.nullByColumn.map(item => `<tr><td>${item.column}</td><td>${item.count.toLocaleString()}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>`);
+  }
   if (!blocks.length) {
     issues.innerHTML = '<div class="alert alert-success py-2 mb-0">No data quality issues found.</div>';
   } else {
@@ -1997,25 +2001,16 @@ function renderDataQuality() {
       renderPreviewArea();
     };
   }
-  const dupAllLink = document.getElementById('dqDupAllLink');
-  if (dupAllLink) {
-    dupAllLink.onclick = (ev) => {
+  const nullLink = document.getElementById('dqNullLink');
+  if (nullLink) {
+    nullLink.onclick = (ev) => {
       ev.preventDefault();
-      state.preview.highlightMode = 'duplicates';
+      state.preview.highlightMode = 'nulls';
       state.preview.duplicateColumn = '';
       gotoStep(4);
       renderPreviewArea();
     };
   }
-  issues.querySelectorAll('.dq-dup-link').forEach(el => {
-    el.onclick = (ev) => {
-      ev.preventDefault();
-      state.preview.highlightMode = 'duplicates';
-      state.preview.duplicateColumn = el.dataset.col || '';
-      gotoStep(4);
-      renderPreviewArea();
-    };
-  });
 }
 
 /* ============================================================
@@ -2124,9 +2119,9 @@ if (btnLoadCfg) {
   };
 }
 
-document.getElementById('btnRunDQ').onclick = renderDataQuality;
 document.getElementById('btnProcess').onclick = () => runProcessing();
 document.getElementById('btnRunSourceDq').onclick = () => runSourceDqCheck();
+document.getElementById('btnRunDQ').onclick = renderDataQuality;
 document.getElementById('btnExportOutlayerExcel').onclick = () => {
   const rows = state.sourceDq.outlayerFlatRows || [];
   if (!rows.length) { alert('Run Outlier Check first.'); return; }
