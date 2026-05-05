@@ -8,6 +8,7 @@
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
 <link href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css" rel="stylesheet" />
 <link href="https://cdn.datatables.net/scroller/2.1.2/css/scroller.bootstrap5.min.css" rel="stylesheet" />
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mathjs@12.4.2/lib/browser/math.min.js"></script>
@@ -1156,7 +1157,7 @@ window.addDataTableHeaderFilterRow = function (tableEl) {
   filterRow.className = 'dt-filter-row';
   Array.from(firstRow.cells).forEach(() => {
     const th = document.createElement('th');
-    th.innerHTML = '<select class="form-select form-select-sm"><option value="">All</option></select>';
+    th.innerHTML = '<select class="form-select form-select-sm" multiple></select>';
     filterRow.appendChild(th);
   });
 }
@@ -1167,7 +1168,9 @@ window.initDataTableHeaderFilters = function (api) {
     const headerCell = window.jQuery(column.header()).closest('thead').find('tr.dt-filter-row th').eq(column.index());
     const select = headerCell.find('select');
     if (!select.length) return;
-    select.empty().append('<option value="">All</option>');
+    const headerName = String(window.jQuery(column.header()).text() || '').trim().toLowerCase();
+    const isJumpColumn = headerName.includes('jump') || headerName.includes('result');
+    select.empty();
     const values = [];
     column.data().unique().each(function (d) {
       values.push(d == null ? '' : d.toString());
@@ -1184,14 +1187,65 @@ window.initDataTableHeaderFilters = function (api) {
     });
     values.forEach((value) => {
       if (!select.find('option[value="' + value + '"]').length) {
-        select.append('<option value="' + value + '">' + value + '</option>');
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = formatFilterOptionLabel(value, isJumpColumn);
+        if (isJumpColumn) {
+          const num = Number(String(value).trim());
+          if (!Number.isNaN(num)) {
+            if (Math.abs(num) >= 3000) {
+              option.style.color = '#dc3545';
+              option.style.fontWeight = '700';
+              option.style.backgroundColor = '#fff1f2';
+            } else if (Math.abs(num) >= 1000) {
+              option.style.color = '#b45309';
+              option.style.backgroundColor = '#fffbeb';
+            } else {
+              option.style.color = '#166534';
+              option.style.backgroundColor = '#f0fdf4';
+            }
+          }
+        }
+        select.append(option);
       }
     });
+    if (window.jQuery && window.jQuery.fn && window.jQuery.fn.select2) {
+      try {
+        if (select.hasClass('select2-hidden-accessible')) {
+          select.select2('destroy');
+        }
+      } catch (e) {
+        // noop
+      }
+      select.select2({
+        width: '100%',
+        placeholder: 'All',
+        closeOnSelect: false,
+        allowClear: true,
+        dropdownAutoWidth: true
+      });
+    }
     select.off('change').on('change', function () {
-      const val = window.jQuery.fn.dataTable.util.escapeRegex(window.jQuery(this).val());
-      column.search(val ? '^' + val + '$' : '', true, false).draw();
+      const selected = window.jQuery(this).val() || [];
+      if (!selected.length) {
+        column.search('', true, false).draw();
+        return;
+      }
+      const regex = selected
+        .map(v => '^' + window.jQuery.fn.dataTable.util.escapeRegex(String(v)) + '$')
+        .join('|');
+      column.search(regex, true, false).draw();
     });
   });
+}
+
+function formatFilterOptionLabel(value, isJumpColumn) {
+  if (!isJumpColumn) return String(value);
+  const num = Number(String(value).trim());
+  if (Number.isNaN(num)) return String(value);
+  if (Math.abs(num) >= 3000) return `HIGH JUMP: ${value}`;
+  if (Math.abs(num) >= 1000) return `MED JUMP: ${value}`;
+  return `LOW JUMP: ${value}`;
 }
 
 /* ============================================================
@@ -2080,7 +2134,7 @@ function attachDataTableResetControl($table, dt, defaultPageLength) {
     dt.search('');
     dt.columns().search('');
     // Clear header filter dropdown selections too.
-    $wrapper.find('thead tr.dt-filter-row select').val('').trigger('change');
+    $wrapper.find('thead tr.dt-filter-row select').val([]).trigger('change.select2').trigger('change');
     // Restore baseline order by first column (Row/#) when available.
     if (firstColIsRow) {
       dt.order([[0, 'asc']]);
@@ -2332,6 +2386,7 @@ document.getElementById('btnExportOutlayerExcel').onclick = () => {
 };
 </script>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
 <script src="https://cdn.datatables.net/scroller/2.1.2/js/dataTables.scroller.min.js"></script>
