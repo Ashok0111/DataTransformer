@@ -11,6 +11,7 @@
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mathjs@12.4.2/lib/browser/math.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/notiflix@3.2.8/dist/notiflix-aio-3.2.8.min.js"></script>
 <style>
   body { background:#f6f8fb; }
   .stepper { display:flex; align-items:center; gap:0; margin:0; padding:0; list-style:none; }
@@ -347,6 +348,18 @@ const state = {
   sourceDq: { lastFn: '', outlayerFlatRows: [], outlayerCols: [] }
 };
 
+function showScreenLoader(message) {
+  if (window.Notiflix && window.Notiflix.Loading) {
+    window.Notiflix.Loading.standard(message || 'Loading...');
+  }
+}
+
+function hideScreenLoader() {
+  if (window.Notiflix && window.Notiflix.Loading) {
+    window.Notiflix.Loading.remove();
+  }
+}
+
 function getSheetDataByName(name) {
   if (!name) return null;
   if (state.sheetData[name]) return state.sheetData[name];
@@ -502,8 +515,12 @@ function handleFile(file) {
   if (file.size === 0) return setStatus('❌ File is empty.', 'danger');
 
   setStatus(`⏳ Reading <strong>${file.name}</strong> (${(file.size/1024).toFixed(1)} KB)...`);
+  showScreenLoader('Loading file...');
   const reader = new FileReader();
-  reader.onerror = () => setStatus('❌ Could not read file (corrupted?).', 'danger');
+  reader.onerror = () => {
+    setStatus('❌ Could not read file (corrupted?).', 'danger');
+    hideScreenLoader();
+  };
   reader.onload = e => {
     try {
       const data = new Uint8Array(e.target.result);
@@ -522,6 +539,8 @@ function handleFile(file) {
       setStatus(`✅ Loaded <strong>${file.name}</strong> — ${wb.SheetNames.length} sheet(s).`, 'success');
     } catch (err) {
       setStatus('❌ Corrupted or unreadable file: ' + err.message, 'danger');
+    } finally {
+      hideScreenLoader();
     }
   };
   reader.readAsArrayBuffer(file);
@@ -649,6 +668,8 @@ function updateSourceDqFunctionUI() {
 }
 
 function runSourceDqCheck() {
+  showScreenLoader('Running Source DQ check...');
+  try {
   const col = document.getElementById('sourceDqColumn').value;
   const targetCol = document.getElementById('sourceDqTargetColumn').value;
   const productCol = document.getElementById('sourceDqProductColumn').value;
@@ -712,7 +733,20 @@ function runSourceDqCheck() {
       resultWrap.innerHTML = '<div class="alert alert-warning py-2 mb-0">Please select Product Column, Pack Size Column, and Target Column for Outlier Check.</div>';
       return;
     }
-    const enrichedRows = filtered.map((r, idx) => ({ __row: idx + 2, ...r }));
+    const enrichedRows = filtered
+      .map((r, idx) => ({ __row: idx + 2, ...r }))
+      .filter(r => {
+        const p = String(r[productCol] ?? '').trim().toLowerCase();
+        const pk = String(r[packCol] ?? '').trim().toLowerCase();
+        const t = String(r[targetCol] ?? '').trim().toLowerCase();
+        // Drop repeated header-like data rows in outlier flow.
+        if (p === String(productCol).trim().toLowerCase() &&
+            pk === String(packCol).trim().toLowerCase() &&
+            t === String(targetCol).trim().toLowerCase()) {
+          return false;
+        }
+        return true;
+      });
     const groups = new Map();
     enrichedRows.forEach(r => {
       const gKey = `${String(r[productCol] ?? '').trim()}||${String(r[packCol] ?? '').trim()}`;
@@ -723,6 +757,7 @@ function runSourceDqCheck() {
     const statusByGroup = new Map();
     const outlierRowsByGroup = new Map();
     const outlierDeltaByRow = new Map();
+    const outlierResultByRow = new Map();
     groups.forEach((items, gKey) => {
       const sorted = items
         .map(r => ({ r, v: Number(String(r[targetCol] ?? '').trim()), rowNo: r.__row }))
@@ -747,13 +782,17 @@ function runSourceDqCheck() {
       for (let i = 1; i < sorted.length; i++) {
         if (diffs[i - 1] !== expectedStep && i > 1 && diffs[i - 2] === expectedStep) {
           outlierRows.add(sorted[i].rowNo);
-          outlierDeltaByRow.set(sorted[i].rowNo, `${sorted[i - 1].v} - ${sorted[i].v} = ${sorted[i - 1].v - sorted[i].v}`);
+          const result = sorted[i].v - sorted[i - 1].v;
+          outlierDeltaByRow.set(sorted[i].rowNo, `${sorted[i].v} - ${sorted[i - 1].v} = ${result}`);
+          outlierResultByRow.set(sorted[i].rowNo, result);
         }
       }
       if (diffs[diffs.length - 1] !== expectedStep) {
         outlierRows.add(sorted[sorted.length - 1].rowNo);
         const j = sorted.length - 1;
-        outlierDeltaByRow.set(sorted[j].rowNo, `${sorted[j - 1].v} - ${sorted[j].v} = ${sorted[j - 1].v - sorted[j].v}`);
+        const result = sorted[j].v - sorted[j - 1].v;
+        outlierDeltaByRow.set(sorted[j].rowNo, `${sorted[j].v} - ${sorted[j - 1].v} = ${result}`);
+        outlierResultByRow.set(sorted[j].rowNo, result);
       }
       outlierRowsByGroup.set(gKey, outlierRows);
       statusByGroup.set(gKey, outlierRows.size ? 'Price Jumped' : 'Valid');
@@ -768,6 +807,7 @@ function runSourceDqCheck() {
         __dq_status: statusByGroup.get(gKey) || 'Valid',
         __dq_outlier: isOutlier ? 'OUTLIER' : '',
         __dq_outlier_delta: isOutlier ? (outlierDeltaByRow.get(r.__row) || '') : '',
+        __dq_outlier_result: isOutlier ? (outlierResultByRow.get(r.__row) ?? '') : '',
         __dq_group_key: gKey,
         ...r
       };
@@ -776,13 +816,17 @@ function runSourceDqCheck() {
       Row: r.__row ?? '',
       Status: r.__dq_status ?? '',
       Outlier: r.__dq_outlier ?? '',
-      'Previous-Current=Result': r.__dq_outlier_delta ?? '',
+      'Current-Previous=Result': r.__dq_outlier_delta ?? '',
+      Result: r.__dq_outlier_result ?? '',
       ...state.sourceCols.reduce((acc, c) => { acc[c] = r[c] ?? ''; return acc; }, {})
     }));
-    state.sourceDq.outlayerCols = ['Row', 'Status', 'Outlier', 'Previous-Current=Result', ...state.sourceCols];
+    state.sourceDq.outlayerCols = ['Row', 'Status', 'Outlier', 'Current-Previous=Result', 'Result', ...state.sourceCols];
     if (exportBtn) exportBtn.classList.remove('d-none');
     renderOutlayerGroupedResult(outRows, productCol, packCol, targetCol);
     return;
+  }
+  } finally {
+    hideScreenLoader();
   }
 }
 
@@ -820,6 +864,7 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
               ${targetCol !== productCol && targetCol !== packCol ? `<td class="${r.__dq_outlier ? 'dq-highlight' : ''}">${r[targetCol] ?? ''}</td>` : ''}
               <td class="${r.__dq_outlier ? 'text-danger fw-bold' : 'text-success'}">${r.__dq_outlier || 'OK'}</td>
               <td class="${r.__dq_outlier ? 'text-danger fw-bold' : ''}">${r.__dq_outlier_delta || ''}</td>
+              <td class="${r.__dq_outlier ? 'text-danger fw-bold' : ''}">${r.__dq_outlier_result ?? ''}</td>
               <td class="${r.__dq_status === 'Price Jumped' ? 'text-danger' : 'text-success'}">${r.__dq_status ?? ''}</td>
             </tr>`).join('')}</tbody>
           </table>
@@ -889,7 +934,7 @@ function buildOutlierGroupHeaders(productCol, packCol, targetCol) {
   const headers = ['Row', productCol];
   if (packCol !== productCol) headers.push(packCol);
   if (targetCol !== productCol && targetCol !== packCol) headers.push(targetCol);
-  headers.push('Outlier', 'Previous-Current=Result', 'Status');
+  headers.push('Outlier', 'Current-Previous=Result', 'Result', 'Status');
   return headers;
 }
 
@@ -897,7 +942,7 @@ function renderOutlayerLineChart(elId, rows) {
   const el = document.getElementById(elId);
   if (!el || !window.echarts) return;
   const chart = window.echarts.getInstanceByDom(el) || window.echarts.init(el);
-  const x = rows.map((r, idx) => `${r.product || 'Product'} ${idx + 1}`);
+  const x = rows.map(r => `${r.product || 'Product'}`);
   const y = rows.map(r => r.y);
   const outlierData = rows.map((r, i) => r.outlier ? ({ value: [x[i], r.y] }) : null).filter(Boolean);
   const jumpNotes = [];
@@ -1604,6 +1649,7 @@ document.getElementById('fxJsonInput').addEventListener('change', async e => {
 document.getElementById('btnProcess').onclick = runProcessing;
 
 function runProcessing() {
+  showScreenLoader('Processing data...');
   const processBtn = document.getElementById('btnProcess');
   const originalBtnHtml = processBtn.innerHTML;
   processBtn.disabled = true;
@@ -1753,6 +1799,7 @@ function runProcessing() {
   state.processed = { rows: outRows, errors, columns: cols, calculations, ms: Math.round(performance.now() - t0) };
   renderPreviewArea();
   } finally {
+    hideScreenLoader();
     processBtn.disabled = false;
     processBtn.innerHTML = originalBtnHtml;
   }
