@@ -101,7 +101,7 @@
               <h6 class="m-0">Source DQ Check</h6>
               <div class="d-flex gap-2">
                 <button id="btnRunSourceDq" class="btn btn-sm btn-outline-primary">Run Source DQ</button>
-                <button id="btnExportOutlayerExcel" class="btn btn-sm btn-outline-success d-none">Export Outlayer Excel</button>
+                <button id="btnExportOutlayerExcel" class="btn btn-sm btn-outline-success d-none">Export Outlier Excel</button>
               </div>
             </div>
             <div class="row g-2">
@@ -110,7 +110,7 @@
                 <select id="sourceDqFunction" class="form-select form-select-sm">
                   <option value="blank_check">Blank Check</option>
                   <option value="duplicate_check">Duplicate Check</option>
-                  <option value="outlayer_check">Outlayer Check</option>
+                  <option value="outlier_check">Outlier Check</option>
                 </select>
               </div>
               <div class="col-md-4" id="sourceDqFilterColumnWrap">
@@ -132,13 +132,13 @@
                 </select>
               </div>
               <div class="col-md-4 d-none" id="sourceDqProductWrap">
-                <label class="form-label small mb-1">Product Column (Outlayer)</label>
+                <label class="form-label small mb-1">Product Column (Outlier)</label>
                 <select id="sourceDqProductColumn" class="form-select form-select-sm">
                   <option value="">Select product column</option>
                 </select>
               </div>
               <div class="col-md-4 d-none" id="sourceDqPackWrap">
-                <label class="form-label small mb-1">Pack Size Column (Outlayer)</label>
+                <label class="form-label small mb-1">Pack Size Column (Outlier)</label>
                 <select id="sourceDqPackColumn" class="form-select form-select-sm">
                   <option value="">Select pack size column</option>
                 </select>
@@ -396,8 +396,20 @@ function getRowsForSheetRow(sheetName, rowIndex) {
     headers.forEach((h, i) => { out[h] = r?.[i] ?? ''; });
     return out;
   });
+  // Remove accidental repeated header rows inside the data body.
+  const normalizedHeaders = headers.map(h => String(h ?? '').trim().toLowerCase());
+  const withoutHeaderRepeats = mapped.filter(r => {
+    const cells = headers.map(h => String(r[h] ?? '').trim().toLowerCase());
+    return !cells.every((v, i) => v === normalizedHeaders[i]);
+  });
   // Drop fully empty trailing/body rows to prevent invalid blank rows in preview/output.
-  return mapped.filter(r => Object.values(r).some(v => String(v ?? '').trim() !== ''));
+  return withoutHeaderRepeats.filter(r => Object.values(r).some(v => String(v ?? '').trim() !== ''));
+}
+
+function isHeaderLikeRow(row, headers) {
+  const normalizedHeaders = headers.map(h => String(h ?? '').trim().toLowerCase());
+  const cells = headers.map(h => String(row?.[h] ?? '').trim().toLowerCase());
+  return cells.every((v, i) => v === normalizedHeaders[i]);
 }
 
 function normalizeJoinKey(value) {
@@ -620,7 +632,7 @@ function initSourceDqControls() {
 
 function updateSourceDqFunctionUI() {
   const fn = document.getElementById('sourceDqFunction')?.value || 'blank_check';
-  const isOutlayer = fn === 'outlayer_check';
+  const isOutlayer = fn === 'outlier_check';
   const show = (id, yes) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -649,13 +661,14 @@ function runSourceDqCheck() {
   state.sourceDq.outlayerFlatRows = [];
   state.sourceDq.outlayerCols = [];
   if (exportBtn) exportBtn.classList.add('d-none');
-  if (!col && fn !== 'outlayer_check') {
+  if (!col && fn !== 'outlier_check') {
     resultWrap.innerHTML = '<div class="alert alert-warning py-2 mb-0">Please select a column.</div>';
     return;
   }
-  const filtered = state.rows.filter(r => {
+  const sourceRows = state.rows.filter(r => !isHeaderLikeRow(r, state.sourceCols));
+  const filtered = sourceRows.filter(r => {
     if (valueFilter === '__ALL__') return true;
-    if (!col) return true; // Optional filter for outlayer check when column is not selected.
+    if (!col) return true; // Optional filter for outlier check when column is not selected.
     return state.sourceCols.some(c => String(r[c] ?? '').trim() === valueFilter);
   });
   if (!filtered.length) {
@@ -694,9 +707,9 @@ function runSourceDqCheck() {
     renderSourceDqResultTable(dupRows, ['__row', ...state.sourceCols], 'Duplicate values found');
   }
 
-  if (fn === 'outlayer_check') {
+  if (fn === 'outlier_check') {
     if (!productCol || !packCol || !targetCol) {
-      resultWrap.innerHTML = '<div class="alert alert-warning py-2 mb-0">Please select Product Column, Pack Size Column, and Target Column for Outlayer Check.</div>';
+      resultWrap.innerHTML = '<div class="alert alert-warning py-2 mb-0">Please select Product Column, Pack Size Column, and Target Column for Outlier Check.</div>';
       return;
     }
     const enrichedRows = filtered.map((r, idx) => ({ __row: idx + 2, ...r }));
@@ -709,6 +722,7 @@ function runSourceDqCheck() {
 
     const statusByGroup = new Map();
     const outlierRowsByGroup = new Map();
+    const outlierDeltaByRow = new Map();
     groups.forEach((items, gKey) => {
       const sorted = items
         .map(r => ({ r, v: Number(String(r[targetCol] ?? '').trim()), rowNo: r.__row }))
@@ -733,10 +747,13 @@ function runSourceDqCheck() {
       for (let i = 1; i < sorted.length; i++) {
         if (diffs[i - 1] !== expectedStep && i > 1 && diffs[i - 2] === expectedStep) {
           outlierRows.add(sorted[i].rowNo);
+          outlierDeltaByRow.set(sorted[i].rowNo, `${sorted[i - 1].v} - ${sorted[i].v} = ${sorted[i - 1].v - sorted[i].v}`);
         }
       }
       if (diffs[diffs.length - 1] !== expectedStep) {
         outlierRows.add(sorted[sorted.length - 1].rowNo);
+        const j = sorted.length - 1;
+        outlierDeltaByRow.set(sorted[j].rowNo, `${sorted[j - 1].v} - ${sorted[j].v} = ${sorted[j - 1].v - sorted[j].v}`);
       }
       outlierRowsByGroup.set(gKey, outlierRows);
       statusByGroup.set(gKey, outlierRows.size ? 'Price Jumped' : 'Valid');
@@ -750,6 +767,7 @@ function runSourceDqCheck() {
         __row: r.__row,
         __dq_status: statusByGroup.get(gKey) || 'Valid',
         __dq_outlier: isOutlier ? 'OUTLIER' : '',
+        __dq_outlier_delta: isOutlier ? (outlierDeltaByRow.get(r.__row) || '') : '',
         __dq_group_key: gKey,
         ...r
       };
@@ -758,9 +776,10 @@ function runSourceDqCheck() {
       Row: r.__row ?? '',
       Status: r.__dq_status ?? '',
       Outlier: r.__dq_outlier ?? '',
+      'Previous-Current=Result': r.__dq_outlier_delta ?? '',
       ...state.sourceCols.reduce((acc, c) => { acc[c] = r[c] ?? ''; return acc; }, {})
     }));
-    state.sourceDq.outlayerCols = ['Row', 'Status', 'Outlier', ...state.sourceCols];
+    state.sourceDq.outlayerCols = ['Row', 'Status', 'Outlier', 'Previous-Current=Result', ...state.sourceCols];
     if (exportBtn) exportBtn.classList.remove('d-none');
     renderOutlayerGroupedResult(outRows, productCol, packCol, targetCol);
     return;
@@ -793,13 +812,14 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
         </div>
         <div class="table-responsive">
           <table class="table table-sm table-bordered mb-0">
-            <thead><tr><th>Row</th><th>${productCol}</th><th>${packCol}</th><th>${targetCol}</th><th>Outlier</th><th>Status</th></tr></thead>
+            <thead><tr>${buildOutlierGroupHeaders(productCol, packCol, targetCol).map(h => `<th>${h}</th>`).join('')}</tr></thead>
             <tbody>${items.map(r => `<tr>
               <td>${r.__row ?? ''}</td>
               <td>${r[productCol] ?? ''}</td>
-              <td>${r[packCol] ?? ''}</td>
-              <td class="${r.__dq_outlier ? 'dq-highlight' : ''}">${r[targetCol] ?? ''}</td>
+              ${packCol !== productCol ? `<td>${r[packCol] ?? ''}</td>` : ''}
+              ${targetCol !== productCol && targetCol !== packCol ? `<td class="${r.__dq_outlier ? 'dq-highlight' : ''}">${r[targetCol] ?? ''}</td>` : ''}
               <td class="${r.__dq_outlier ? 'text-danger fw-bold' : 'text-success'}">${r.__dq_outlier || 'OK'}</td>
+              <td class="${r.__dq_outlier ? 'text-danger fw-bold' : ''}">${r.__dq_outlier_delta || ''}</td>
               <td class="${r.__dq_status === 'Price Jumped' ? 'text-danger' : 'text-success'}">${r.__dq_status ?? ''}</td>
             </tr>`).join('')}</tbody>
           </table>
@@ -813,7 +833,7 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
       </div>`);
   });
   resultWrap.innerHTML = `
-    <div class="alert alert-info py-2 mb-2">Outlayer groups: <strong>${grouped.size}</strong></div>
+    <div class="alert alert-info py-2 mb-2">Outlier groups: <strong>${grouped.size}</strong></div>
     ${sections.join('')}
   `;
   resultWrap.querySelectorAll('.outlayer-chart-btn').forEach(btn => {
@@ -865,6 +885,14 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
   });
 }
 
+function buildOutlierGroupHeaders(productCol, packCol, targetCol) {
+  const headers = ['Row', productCol];
+  if (packCol !== productCol) headers.push(packCol);
+  if (targetCol !== productCol && targetCol !== packCol) headers.push(targetCol);
+  headers.push('Outlier', 'Previous-Current=Result', 'Status');
+  return headers;
+}
+
 function renderOutlayerLineChart(elId, rows) {
   const el = document.getElementById(elId);
   if (!el || !window.echarts) return;
@@ -889,10 +917,10 @@ function renderOutlayerLineChart(elId, rows) {
     xAxis: {
       type: 'category',
       data: x,
-      name: 'Product',
-      nameLocation: 'middle',
-      nameGap: 45,
-      axisLabel: { interval: 0, rotate: x.length > 8 ? 25 : 0 }
+      show: false,
+      axisLabel: { show: false },
+      axisTick: { show: false },
+      axisLine: { show: false }
     },
     yAxis: { type: 'value', name: 'Value' },
     series: [
@@ -926,6 +954,7 @@ document.addEventListener('fullscreenchange', () => {
 
 function renderSourceDqResultTable(rows, columns, title) {
   const resultWrap = document.getElementById('sourceDqResult');
+  const uniqueColumns = [...new Set(columns)];
   const labelMap = {
     __row: 'Row',
     __dq_prev: 'Previous',
@@ -938,11 +967,11 @@ function renderSourceDqResultTable(rows, columns, title) {
     <div class="alert alert-warning py-2 mb-2">${title}: <strong>${rows.length}</strong></div>
     <div class="table-responsive">
       <table id="sourceDqResultTable" class="table table-sm table-striped table-bordered w-100">
-        <thead><tr>${columns.map(c => {
+        <thead><tr>${uniqueColumns.map(c => {
           const focus = ['__dq_prev','__dq_curr','__dq_jump','__dq_filter'].includes(c) ? 'source-dq-focus' : '';
           return `<th class="${focus}">${labelMap[c] || c}</th>`;
         }).join('')}</tr></thead>
-        <tbody>${rows.map(r => `<tr>${columns.map(c => {
+        <tbody>${rows.map(r => `<tr>${uniqueColumns.map(c => {
           const focus = ['__dq_prev','__dq_curr','__dq_jump','__dq_filter'].includes(c) ? 'source-dq-focus' : '';
           return `<td class="${focus}">${r[c] ?? ''}</td>`;
         }).join('')}</tr>`).join('')}</tbody>
@@ -2053,12 +2082,12 @@ document.getElementById('btnProcess').onclick = () => runProcessing();
 document.getElementById('btnRunSourceDq').onclick = () => runSourceDqCheck();
 document.getElementById('btnExportOutlayerExcel').onclick = () => {
   const rows = state.sourceDq.outlayerFlatRows || [];
-  if (!rows.length) { alert('Run Outlayer Check first.'); return; }
+  if (!rows.length) { alert('Run Outlier Check first.'); return; }
   const cols = state.sourceDq.outlayerCols || Object.keys(rows[0] || {});
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
-  XLSX.utils.book_append_sheet(wb, ws, 'Outlayer Report');
-  XLSX.writeFile(wb, 'outlayer_report.xlsx');
+  XLSX.utils.book_append_sheet(wb, ws, 'Outlier Report');
+  XLSX.writeFile(wb, 'outlier_report.xlsx');
 };
 </script>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
