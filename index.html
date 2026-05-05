@@ -868,6 +868,7 @@ function runSourceDqCheck() {
 function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
   const resultWrap = document.getElementById('sourceDqResult');
   const grouped = new Map();
+  const chartRowsById = {};
   rows.forEach(r => {
     const key = r.__dq_group_key || `${String(r[productCol] ?? '').trim()}||${String(r[packCol] ?? '').trim()}`;
     if (!grouped.has(key)) grouped.set(key, []);
@@ -880,6 +881,12 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
     const pack = String(items[0]?.[packCol] ?? '');
     const chartId = `outlayerChart_${String(key).replace(/[^a-zA-Z0-9]/g, '_')}`;
     const chartWrapId = `${chartId}_wrap`;
+    chartRowsById[chartId] = items.map(r => ({
+      rowNo: Number(r.__row),
+      product: String(r[productCol] ?? '').trim(),
+      y: Number(String(r[targetCol] ?? '').trim()),
+      outlier: String(r.__dq_outlier || '').trim() === 'OUTLIER'
+    })).filter(r => !Number.isNaN(r.y));
     sections.push(`
       <div class="mb-3 border rounded p-2 bg-white">
         <div class="d-flex justify-content-between align-items-center px-1 py-1">
@@ -929,16 +936,7 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
         chartWrap.classList.remove('d-none');
         if (tableWrap) tableWrap.classList.add('d-none');
         btn.textContent = 'Table View';
-        const rows = Array.from(parent.querySelectorAll('tbody tr')).map(tr => {
-          const tds = tr.querySelectorAll('td');
-          return {
-            rowNo: Number((tds[0]?.textContent || '').trim()),
-            product: (tds[1]?.textContent || '').trim(),
-            y: Number((tds[3]?.textContent || '').trim()),
-            outlier: (tds[4]?.textContent || '').trim() === 'OUTLIER'
-          };
-        }).filter(r => !Number.isNaN(r.y));
-        renderOutlayerLineChart(chartId, rows);
+        renderOutlayerLineChart(chartId, chartRowsById[chartId] || []);
       } else {
         chartWrap.classList.add('d-none');
         if (tableWrap) tableWrap.classList.remove('d-none');
