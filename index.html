@@ -39,6 +39,8 @@
   .small-muted { font-size:.825rem; color:#6c757d; }
   .dq-highlight { background: #fff3cd !important; box-shadow: inset 0 0 0 1px #ffec99; }
   .source-dq-focus { background:#fff3cd !important; font-weight:600; }
+  .dt-filter-row th { padding: 4px 8px; }
+  .dt-filter-row select { width: 100%; font-size: .85rem; }
   .upload-tabs { display:flex; gap:8px; border-bottom:1px solid #dee2e6; margin-bottom:16px; }
   .upload-tab-btn {
     border:1px solid #dee2e6; border-bottom:none; background:#fff; color:#495057;
@@ -856,7 +858,7 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
           </div>
         </div>
         <div class="table-responsive">
-          <table class="table table-sm table-bordered mb-0">
+          <table id="${chartId}_table" class="table table-sm table-bordered mb-0 outlier-group-table">
             <thead><tr>${buildOutlierGroupHeaders(productCol, packCol, targetCol).map(h => `<th>${h}</th>`).join('')}</tr></thead>
             <tbody>${items.map(r => `<tr>
               <td>${r.__row ?? ''}</td>
@@ -882,6 +884,7 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
     <div class="alert alert-info py-2 mb-2">Outlier groups: <strong>${grouped.size}</strong></div>
     ${sections.join('')}
   `;
+  initOutlierGroupDataTables();
   resultWrap.querySelectorAll('.outlayer-chart-btn').forEach(btn => {
     btn.onclick = () => {
       const chartId = btn.dataset.chartId;
@@ -1076,18 +1079,89 @@ function initSourceDqDataTable() {
   if (window.jQuery.fn.DataTable.isDataTable('#sourceDqResultTable')) {
     $table.DataTable().destroy();
   }
+  const tableEl = $table.get(0);
+  window.addDataTableHeaderFilterRow(tableEl);
   $table.DataTable({
     deferRender: true,
+    paging: true,
+    pagingType: 'simple_numbers',
+    pageLength: 10,
+    lengthMenu: [10, 25, 50, 100],
     scrollY: '48vh',
     scrollX: true,
     scrollCollapse: true,
-    scroller: true,
-    pageLength: 10,
-    lengthMenu: [10, 25, 50, 100],
     order: [],
     autoWidth: false,
     searching: true,
-    language: { search: 'Filter:' }
+    language: { search: 'Filter:' },
+    initComplete: function () {
+      window.initDataTableHeaderFilters(this.api());
+    }
+  });
+}
+
+function initOutlierGroupDataTables() {
+  if (!window.jQuery || !window.jQuery.fn || !window.jQuery.fn.DataTable) return;
+  window.jQuery('.outlier-group-table').each(function () {
+    const $table = window.jQuery(this);
+    if (!$table.length) return;
+    if (window.jQuery.fn.DataTable.isDataTable(this)) {
+      $table.DataTable().destroy();
+    }
+    const tableEl = $table.get(0);
+    window.addDataTableHeaderFilterRow(tableEl);
+    $table.DataTable({
+      deferRender: true,
+      paging: true,
+      pagingType: 'simple_numbers',
+      pageLength: 10,
+      lengthMenu: [10, 25, 50, 100],
+      scrollX: true,
+      scrollCollapse: true,
+      order: [],
+      autoWidth: false,
+      searching: true,
+      language: { search: 'Filter:' },
+      initComplete: function () {
+        window.initDataTableHeaderFilters(this.api());
+      }
+    });
+  });
+}
+
+window.addDataTableHeaderFilterRow = function (tableEl) {
+  if (!tableEl || !tableEl.tHead) return;
+  const thead = tableEl.tHead;
+  if (thead.querySelector('.dt-filter-row')) return;
+  const firstRow = thead.rows[0];
+  if (!firstRow) return;
+  const filterRow = thead.insertRow(-1);
+  filterRow.className = 'dt-filter-row';
+  Array.from(firstRow.cells).forEach(() => {
+    const th = document.createElement('th');
+    th.innerHTML = '<select class="form-select form-select-sm"><option value="">All</option></select>';
+    filterRow.appendChild(th);
+  });
+}
+
+window.initDataTableHeaderFilters = function (api) {
+  api.columns().every(function () {
+    const column = this;
+    const headerCell = window.jQuery(column.header()).closest('thead').find('tr.dt-filter-row th').eq(column.index());
+    const select = headerCell.find('select');
+    if (!select.length) return;
+    select.empty().append('<option value="">All</option>');
+    column.data().unique().sort().each(function (d) {
+      if (d == null) d = '';
+      const value = d.toString();
+      if (!select.find('option[value="' + value + '"]').length) {
+        select.append('<option value="' + value + '">' + value + '</option>');
+      }
+    });
+    select.off('change').on('change', function () {
+      const val = window.jQuery.fn.dataTable.util.escapeRegex(window.jQuery(this).val());
+      column.search(val ? '^' + val + '$' : '', true, false).draw();
+    });
   });
 }
 
@@ -1939,18 +2013,24 @@ function initPreviewDataTable() {
   if (window.jQuery.fn.DataTable.isDataTable('#previewResultTable')) {
     $table.DataTable().destroy();
   }
+  const tableEl = $table.get(0);
+  window.addDataTableHeaderFilterRow(tableEl);
   $table.DataTable({
     deferRender: true,
+    paging: true,
+    pagingType: 'simple_numbers',
+    pageLength: 10,
+    lengthMenu: [10, 25, 50, 100],
     scrollY: '48vh',
     scrollX: true,
     scrollCollapse: true,
-    scroller: true,
-    pageLength: 10,
-    lengthMenu: [10, 25, 50, 100],
     order: [],
     autoWidth: false,
     searching: true,
-    language: { search: 'Filter:' }
+    language: { search: 'Filter:' },
+    initComplete: function () {
+      window.initDataTableHeaderFilters(this.api());
+    }
   });
 }
 
