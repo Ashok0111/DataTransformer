@@ -10,6 +10,7 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mathjs@12.4.2/lib/browser/math.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 <style>
   body { background:#f6f8fb; }
   .stepper { display:flex; align-items:center; gap:0; margin:0; padding:0; list-style:none; }
@@ -43,6 +44,8 @@
     font-size:.9rem;
   }
   .upload-tab-btn.active { background:#0d6efd; color:#fff; border-color:#0d6efd; }
+  .outlayer-chart-wrap:fullscreen { background:#fff; padding:12px; }
+  .outlayer-chart-wrap:fullscreen .outlayer-chart-canvas { height: calc(100vh - 90px) !important; }
 </style>
 </head>
 <body>
@@ -705,13 +708,15 @@ function runSourceDqCheck() {
     });
 
     const statusByGroup = new Map();
+    const outlierRowsByGroup = new Map();
     groups.forEach((items, gKey) => {
       const sorted = items
-        .map(r => ({ r, v: Number(String(r[targetCol] ?? '').trim()) }))
+        .map(r => ({ r, v: Number(String(r[targetCol] ?? '').trim()), rowNo: r.__row }))
         .filter(x => !Number.isNaN(x.v))
         .sort((a, b) => a.v - b.v);
       if (sorted.length < 3) {
         statusByGroup.set(gKey, 'Valid');
+        outlierRowsByGroup.set(gKey, new Set());
         return;
       }
       const diffs = [];
@@ -721,15 +726,30 @@ function runSourceDqCheck() {
       const freq = new Map();
       diffs.forEach(d => freq.set(d, (freq.get(d) || 0) + 1));
       const expectedStep = [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
-      const hasJump = diffs.some(d => d !== expectedStep);
-      statusByGroup.set(gKey, hasJump ? 'Price Jumped' : 'Valid');
+      const outlierRows = new Set();
+      // Point-level rule:
+      // 1) first value where diff deviates after a normal run
+      // 2) last value when final diff deviates
+      for (let i = 1; i < sorted.length; i++) {
+        if (diffs[i - 1] !== expectedStep && i > 1 && diffs[i - 2] === expectedStep) {
+          outlierRows.add(sorted[i].rowNo);
+        }
+      }
+      if (diffs[diffs.length - 1] !== expectedStep) {
+        outlierRows.add(sorted[sorted.length - 1].rowNo);
+      }
+      outlierRowsByGroup.set(gKey, outlierRows);
+      statusByGroup.set(gKey, outlierRows.size ? 'Price Jumped' : 'Valid');
     });
 
     const outRows = enrichedRows.map(r => {
       const gKey = `${String(r[productCol] ?? '').trim()}||${String(r[packCol] ?? '').trim()}`;
+      const outlierSet = outlierRowsByGroup.get(gKey) || new Set();
+      const isOutlier = outlierSet.has(r.__row);
       return {
         __row: r.__row,
         __dq_status: statusByGroup.get(gKey) || 'Valid',
+        __dq_outlier: isOutlier ? 'OUTLIER' : '',
         __dq_group_key: gKey,
         ...r
       };
@@ -737,9 +757,10 @@ function runSourceDqCheck() {
     state.sourceDq.outlayerFlatRows = outRows.map(r => ({
       Row: r.__row ?? '',
       Status: r.__dq_status ?? '',
+      Outlier: r.__dq_outlier ?? '',
       ...state.sourceCols.reduce((acc, c) => { acc[c] = r[c] ?? ''; return acc; }, {})
     }));
-    state.sourceDq.outlayerCols = ['Row', 'Status', ...state.sourceCols];
+    state.sourceDq.outlayerCols = ['Row', 'Status', 'Outlier', ...state.sourceCols];
     if (exportBtn) exportBtn.classList.remove('d-none');
     renderOutlayerGroupedResult(outRows, productCol, packCol, targetCol);
     return;
@@ -759,23 +780,35 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
     const status = items[0]?.__dq_status || 'Valid';
     const p = String(items[0]?.[productCol] ?? '');
     const pack = String(items[0]?.[packCol] ?? '');
+    const chartId = `outlayerChart_${String(key).replace(/[^a-zA-Z0-9]/g, '_')}`;
+    const chartWrapId = `${chartId}_wrap`;
     sections.push(`
       <div class="mb-3 border rounded p-2 bg-white">
         <div class="d-flex justify-content-between align-items-center px-1 py-1">
           <div><strong>${productCol}:</strong> ${p} &nbsp;|&nbsp; <strong>${packCol}:</strong> ${pack}</div>
-          <div class="${status === 'Price Jumped' ? 'text-danger' : 'text-success'}"><strong>${status}</strong></div>
+          <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-sm btn-outline-primary outlayer-chart-btn" data-chart-id="${chartId}">Line Graph</button>
+            <div class="${status === 'Price Jumped' ? 'text-danger' : 'text-success'}"><strong>${status}</strong></div>
+          </div>
         </div>
         <div class="table-responsive">
           <table class="table table-sm table-bordered mb-0">
-            <thead><tr><th>Row</th><th>${productCol}</th><th>${packCol}</th><th>${targetCol}</th><th>Status</th></tr></thead>
+            <thead><tr><th>Row</th><th>${productCol}</th><th>${packCol}</th><th>${targetCol}</th><th>Outlier</th><th>Status</th></tr></thead>
             <tbody>${items.map(r => `<tr>
               <td>${r.__row ?? ''}</td>
               <td>${r[productCol] ?? ''}</td>
               <td>${r[packCol] ?? ''}</td>
-              <td>${r[targetCol] ?? ''}</td>
+              <td class="${r.__dq_outlier ? 'dq-highlight' : ''}">${r[targetCol] ?? ''}</td>
+              <td class="${r.__dq_outlier ? 'text-danger fw-bold' : 'text-success'}">${r.__dq_outlier || 'OK'}</td>
               <td class="${r.__dq_status === 'Price Jumped' ? 'text-danger' : 'text-success'}">${r.__dq_status ?? ''}</td>
             </tr>`).join('')}</tbody>
           </table>
+        </div>
+        <div id="${chartWrapId}" class="mt-2 d-none outlayer-chart-wrap">
+          <div class="d-flex justify-content-end mb-1">
+            <button class="btn btn-sm btn-outline-secondary outlayer-chart-full-btn" data-wrap-id="${chartWrapId}" data-chart-id="${chartId}">Fullscreen</button>
+          </div>
+          <div id="${chartId}" class="outlayer-chart-canvas" style="height:320px;"></div>
         </div>
       </div>`);
   });
@@ -783,7 +816,113 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
     <div class="alert alert-info py-2 mb-2">Outlayer groups: <strong>${grouped.size}</strong></div>
     ${sections.join('')}
   `;
+  resultWrap.querySelectorAll('.outlayer-chart-btn').forEach(btn => {
+    btn.onclick = () => {
+      const chartId = btn.dataset.chartId;
+      const chartWrap = document.getElementById(`${chartId}_wrap`);
+      if (!chartWrap) return;
+      const isHidden = chartWrap.classList.contains('d-none');
+      chartWrap.classList.toggle('d-none', !isHidden);
+      if (!isHidden) return;
+      const parent = btn.closest('.mb-3');
+      const rows = Array.from(parent.querySelectorAll('tbody tr')).map(tr => {
+        const tds = tr.querySelectorAll('td');
+        return {
+          rowNo: Number((tds[0]?.textContent || '').trim()),
+          product: (tds[1]?.textContent || '').trim(),
+          y: Number((tds[3]?.textContent || '').trim()),
+          outlier: (tds[4]?.textContent || '').trim() === 'OUTLIER'
+        };
+      }).filter(r => !Number.isNaN(r.y));
+      renderOutlayerLineChart(chartId, rows);
+    };
+  });
+  resultWrap.querySelectorAll('.outlayer-chart-full-btn').forEach(btn => {
+    btn.onclick = async () => {
+      const wrapId = btn.dataset.wrapId;
+      const chartId = btn.dataset.chartId;
+      const wrap = document.getElementById(wrapId);
+      if (!wrap) return;
+      try {
+        if (!document.fullscreenElement && wrap.requestFullscreen) {
+          await wrap.requestFullscreen();
+          wrap.style.background = '#fff';
+          wrap.style.padding = '12px';
+        } else if (document.fullscreenElement) {
+          await document.exitFullscreen();
+        }
+      } catch (e) {
+        console.warn('Fullscreen not available:', e);
+      } finally {
+        setTimeout(() => {
+          const el = document.getElementById(chartId);
+          if (!el || !window.echarts) return;
+          const chart = window.echarts.getInstanceByDom(el);
+          if (chart) chart.resize();
+        }, 120);
+      }
+    };
+  });
 }
+
+function renderOutlayerLineChart(elId, rows) {
+  const el = document.getElementById(elId);
+  if (!el || !window.echarts) return;
+  const chart = window.echarts.getInstanceByDom(el) || window.echarts.init(el);
+  const x = rows.map((r, idx) => `${r.product || 'Product'} ${idx + 1}`);
+  const y = rows.map(r => r.y);
+  const outlierData = rows.map((r, i) => r.outlier ? ({ value: [x[i], r.y] }) : null).filter(Boolean);
+  const jumpNotes = [];
+  rows.forEach((r, i) => {
+    if (!r.outlier || i === 0) return;
+    const from = rows[i - 1].y;
+    const to = r.y;
+    jumpNotes.push({
+      coord: [x[i], to],
+      value: to,
+      label: { show: true, formatter: `Jump: ${from} -> ${to}`, color: '#dc3545', fontSize: 10, position: 'top' }
+    });
+  });
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 70, right: 50, top: 45, bottom: 70, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: x,
+      name: 'Product',
+      nameLocation: 'middle',
+      nameGap: 45,
+      axisLabel: { interval: 0, rotate: x.length > 8 ? 25 : 0 }
+    },
+    yAxis: { type: 'value', name: 'Value' },
+    series: [
+      {
+        type: 'line',
+        smooth: false,
+        data: y,
+        symbol: 'circle',
+        symbolSize: 7,
+        lineStyle: { width: 2, color: '#0d6efd' },
+        itemStyle: { color: '#0d6efd' }
+      },
+      {
+        type: 'scatter',
+        data: outlierData,
+        symbolSize: 10,
+        itemStyle: { color: '#dc3545' },
+        markPoint: { data: jumpNotes }
+      }
+    ]
+  }, true);
+}
+
+document.addEventListener('fullscreenchange', () => {
+  if (!window.echarts) return;
+  document.querySelectorAll('.outlayer-chart-canvas').forEach((el) => {
+    const chart = window.echarts.getInstanceByDom(el);
+    if (chart) chart.resize();
+  });
+});
 
 function renderSourceDqResultTable(rows, columns, title) {
   const resultWrap = document.getElementById('sourceDqResult');
