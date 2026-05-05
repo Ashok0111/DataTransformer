@@ -430,6 +430,25 @@ function isHeaderLikeRow(row, headers) {
   return cells.every((v, i) => v === normalizedHeaders[i]);
 }
 
+function median(values) {
+  if (!values || !values.length) return null;
+  const arr = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(arr.length / 2);
+  return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+}
+
+function getWindowExpectedDiff(diffs, idx, windowSize) {
+  const start = Math.max(0, idx - windowSize);
+  const end = Math.min(diffs.length - 1, idx + windowSize);
+  const bucket = [];
+  for (let i = start; i <= end; i++) {
+    if (i === idx) continue;
+    const d = Number(diffs[i]);
+    if (!Number.isNaN(d) && d > 0) bucket.push(d);
+  }
+  return bucket.length ? median(bucket) : null;
+}
+
 function normalizeJoinKey(value) {
   if (value == null) return '';
   const raw = String(value).trim();
@@ -778,30 +797,33 @@ function runSourceDqCheck() {
       for (let i = 1; i < sorted.length; i++) {
         diffs.push(sorted[i].v - sorted[i - 1].v);
       }
-      const freq = new Map();
-      diffs.forEach(d => freq.set(d, (freq.get(d) || 0) + 1));
-      const expectedStep = [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
       const outlierRows = new Set();
       const prevRefRows = new Set();
-      // Point-level rule:
-      // 1) first value where diff deviates after a normal run
-      // 2) last value when final diff deviates
-      for (let i = 1; i < sorted.length; i++) {
-        if (diffs[i - 1] !== expectedStep && i > 1 && diffs[i - 2] === expectedStep) {
-          outlierRows.add(sorted[i].rowNo);
-          prevRefRows.add(sorted[i - 1].rowNo);
-          const result = sorted[i].v - sorted[i - 1].v;
-          outlierDeltaByRow.set(sorted[i].rowNo, `${sorted[i].v} - ${sorted[i - 1].v} = ${result}`);
-          outlierResultByRow.set(sorted[i].rowNo, result);
-        }
-      }
-      if (diffs[diffs.length - 1] !== expectedStep) {
-        outlierRows.add(sorted[sorted.length - 1].rowNo);
-        const j = sorted.length - 1;
-        prevRefRows.add(sorted[j - 1].rowNo);
-        const result = sorted[j].v - sorted[j - 1].v;
-        outlierDeltaByRow.set(sorted[j].rowNo, `${sorted[j].v} - ${sorted[j - 1].v} = ${result}`);
-        outlierResultByRow.set(sorted[j].rowNo, result);
+      // Window-based trend validation:
+      // Compare each diff with local median diff from neighboring window.
+      const windowSize = 2;
+      const minAbsJump = 500;
+      const upperRatio = 1.8;
+      const lowerRatio = 0.35;
+      for (let dIdx = 0; dIdx < diffs.length; dIdx++) {
+        const currentDiff = Number(diffs[dIdx]);
+        if (Number.isNaN(currentDiff) || currentDiff <= 0) continue;
+        const expected = getWindowExpectedDiff(diffs, dIdx, windowSize);
+        if (expected == null || expected <= 0) continue;
+        const ratio = currentDiff / expected;
+        const isTrendBreak =
+          Math.abs(currentDiff - expected) >= minAbsJump &&
+          (ratio >= upperRatio || ratio <= lowerRatio);
+        if (!isTrendBreak) continue;
+
+        // diff[dIdx] is between sorted[dIdx] and sorted[dIdx+1]
+        const prevPoint = sorted[dIdx];
+        const currPoint = sorted[dIdx + 1];
+        outlierRows.add(currPoint.rowNo);
+        prevRefRows.add(prevPoint.rowNo);
+        const result = currPoint.v - prevPoint.v;
+        outlierDeltaByRow.set(currPoint.rowNo, `${currPoint.v} - ${prevPoint.v} = ${result}`);
+        outlierResultByRow.set(currPoint.rowNo, result);
       }
       outlierRowsByGroup.set(gKey, outlierRows);
       prevRefRowsByGroup.set(gKey, prevRefRows);
