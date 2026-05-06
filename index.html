@@ -32,7 +32,7 @@
   .stepper-item.done .step-dot { border-color:#198754; background:#198754; color:#fff; }
   .stepper-item.done .step-label { color:#198754; font-weight:600; }
   .stepper-item.done .step-line { background:#198754; }
-  .table-scroll { max-height: 420px; overflow:auto; }
+  .table-scroll { max-height: 840px; overflow:auto; }
   .map-row td { vertical-align: middle; }
   code.formula { background:#eef; padding:2px 6px; border-radius:4px; }
   .drop-zone { border:2px dashed #adb5bd; border-radius:12px; padding:48px; text-align:center; background:#fff; transition:.2s; }
@@ -692,6 +692,12 @@ function updateSourceDqFunctionUI() {
 }
 
 function runSourceDqCheck() {
+  const runBtn = document.getElementById('btnRunSourceDq');
+  const originalBtnHtml = runBtn ? runBtn.innerHTML : '';
+  if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Running...';
+  }
   showScreenLoader('Running Source DQ check...');
   try {
   const col = document.getElementById('sourceDqColumn').value;
@@ -875,6 +881,10 @@ function runSourceDqCheck() {
   }
   } finally {
     hideScreenLoader();
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.innerHTML = originalBtnHtml;
+    }
   }
 }
 
@@ -888,10 +898,23 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
     grouped.get(key).push(r);
   });
   const sections = [];
-  grouped.forEach((items, key) => {
+  const jumpedIndex = [];
+  const orderedGroups = Array.from(grouped.entries()).sort((a, b) => {
+    const aStatus = a[1][0]?.__dq_status || 'Valid';
+    const bStatus = b[1][0]?.__dq_status || 'Valid';
+    if (aStatus === bStatus) return 0;
+    if (aStatus === 'Price Jumped') return -1;
+    if (bStatus === 'Price Jumped') return 1;
+    return 0;
+  });
+  orderedGroups.forEach(([key, items]) => {
     const status = items[0]?.__dq_status || 'Valid';
     const p = String(items[0]?.[productCol] ?? '');
     const pack = String(items[0]?.[packCol] ?? '');
+    if (status === 'Price Jumped') {
+      const jumpedCount = items.filter(r => String(r.__dq_outlier || '').trim() === 'OUTLIER').length;
+      jumpedIndex.push({ product: p, pack, total: jumpedCount });
+    }
     const chartId = `outlayerChart_${String(key).replace(/[^a-zA-Z0-9]/g, '_')}`;
     const chartWrapId = `${chartId}_wrap`;
     chartRowsById[chartId] = items.map(r => ({
@@ -932,8 +955,21 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
         </div>
       </div>`);
   });
+  const indexHtml = jumpedIndex.length ? `
+    <div class="mb-3">
+      <h6>Price Jumped Index</h6>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered">
+          <thead><tr><th>${productCol}</th><th>${packCol}</th><th>Total Price Jumped</th></tr></thead>
+          <tbody>${jumpedIndex.map(i => `<tr><td>${i.product}</td><td>${i.pack}</td><td>${i.total}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>` : `
+    <div class="alert alert-success py-2 mb-2">No Price Jumped groups found.</div>`;
+
   resultWrap.innerHTML = `
     <div class="alert alert-info py-2 mb-2">Outlier groups: <strong>${grouped.size}</strong></div>
+    ${indexHtml}
     ${sections.join('')}
   `;
   initOutlierGroupDataTables();
@@ -1060,6 +1096,22 @@ function renderOutlayerLineChart(elId, rows) {
       axisLine: { show: false }
     },
     yAxis: { type: 'value', name: 'Value' },
+    dataZoom: [
+      {
+        type: 'inside',
+        xAxisIndex: 0,
+        filterMode: 'none',
+        zoomOnMouseWheel: true,
+        moveOnMouseMove: true,
+        moveOnMouseWheel: true
+      },
+      {
+        type: 'slider',
+        xAxisIndex: 0,
+        height: 18,
+        bottom: 8
+      }
+    ],
     series: [
       {
         type: 'line',
