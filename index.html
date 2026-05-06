@@ -955,13 +955,15 @@ function renderOutlayerGroupedResult(rows, productCol, packCol, targetCol) {
         </div>
       </div>`);
   });
+  const totalJumpedProducts = new Set(jumpedIndex.map(i => String(i.product))).size;
   const indexHtml = jumpedIndex.length ? `
     <div class="mb-3">
       <h6>Price Jumped Index</h6>
+      <div class="small text-muted mb-1">Total Products Price Jumped: <strong>${totalJumpedProducts}</strong></div>
       <div class="table-responsive">
         <table class="table table-sm table-bordered">
-          <thead><tr><th>${productCol}</th><th>${packCol}</th><th>Total Price Jumped</th></tr></thead>
-          <tbody>${jumpedIndex.map(i => `<tr><td>${i.product}</td><td>${i.pack}</td><td>${i.total}</td></tr>`).join('')}</tbody>
+          <thead><tr><th>${productCol}</th><th>${packCol}</th></tr></thead>
+          <tbody>${jumpedIndex.map(i => `<tr><td>${i.product}</td><td>${i.pack}</td></tr>`).join('')}</tbody>
         </table>
       </div>
     </div>` : `
